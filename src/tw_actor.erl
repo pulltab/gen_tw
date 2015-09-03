@@ -1,12 +1,15 @@
 -module(tw_actor).
 
 %% API
--export([spawn_link/2
+-export([spawn/2,
+         spawn_link/2,
+         stop/1,
+         notify/3
         ]).
 
--export([init/3]).
+-export([init/4]).
 
--callback init() -> {ok, InitialState::term()}.
+-callback init() -> {ok, InitialState::term()} | {error, Reason::term()}.
 -callback tick_tock(CurrentLVT::integer(), State::term()) -> {NextLVT::integer(), NextState::term()}.
 -callback handle_event(CurrentLVT::integer(), EventLVT::integer(), Event::term(), ModuleState::term()) -> NextState::term() | {error, Reason::term()}.
 
@@ -18,36 +21,67 @@
      id,            %% Unique identifier for the event
      anti = 0,      %% 0 for event, -1 for antievent
      src,           %% Originating pid
-     payload         %% Event payload
+     payload        %% Event payload
     }).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
--spec spawn_link(atom(), [term()]) -> {ok, pid()}.
-spawn_link(Module, Args) ->
-    Pid = proc_lib:spawn_link(?MODULE, init, [0, Module, Args]),
+-spec spawn(atom(), [term()]) -> {ok, pid()}.
+spawn(Module, Args) ->
+    Pid = proc_lib:spawn(?MODULE, init, [self(), 0, Module, Args]),
     {ok, Pid}.
 
--spec init(integer(), atom(), list(term())) -> no_return().
-init(InitialLVT, Module, Args) ->
+-spec spawn_link(atom(), [term()]) -> {ok, pid()}.
+spawn_link(Module, Args) ->
+    Pid = proc_lib:spawn_link(?MODULE, init, [self(), 0, Module, Args]),
+    {ok, Pid}.
+
+stop(Pid) ->
+    exit(Pid, normal).
+
+-spec notify(pid(), integer(), term()) -> ok.
+notify(Ref, LVT, Payload) ->
+    Event =
+        #event{
+            lvt = LVT,
+            id = make_ref(),
+            src = self(),
+            payload = Payload
+        },
+    Ref ! Event,
+    ok.
+
+%%%===================================================================
+%%% Internals
+%%%===================================================================
+
+-spec init(pid(), integer(), atom(), list(term())) -> no_return().
+init(Parent, InitialLVT, Module, Args) ->
     case erlang:apply(Module, init, Args) of
         {ok, ModuleState} ->
+            proc_lib:init_ack(Parent, {ok, self()}),
             loop(InitialLVT, [], [], [], Module, ModuleState);
 
         Error ->
-            erlang:throw(Error)
+            exit(Error)
     end.
 
+-spec drain_msgq(Events::list(#event{}), TMO::integer()) -> ordsets:ordset(#event{}).
 drain_msgq(Events, TMO) ->
     receive
-        EventOrAntievent ->
-            drain_msgq([EventOrAntievent | Events], 0)
+        EventOrAntievent when is_record(EventOrAntievent, event) ->
+            drain_msgq([EventOrAntievent | Events], 0);
+
+        Msg ->
+            error_logger:warning("~p discarding msg: ~p~n", [?MODULE, Msg])
+
     after TMO ->
-        Events
+        ordsets:from_list(Events)
     end.
 
+-spec drain_msgq(TMO::integer()) -> ordsets:ordset(#event{}).
 drain_msgq(InitialTMO) ->
     drain_msgq([], InitialTMO).
 
@@ -89,9 +123,12 @@ loop(LVT, [Event = #event{}|T], PastEvents, [], Module, ModState) ->
     {NewLVT, NewModState} = handle_event(LVT, Event, Module, ModState),
     loop(NewLVT, T, [Event | PastEvents], [], Module, NewModState);
 
+loop(LVT, [Event|T], PastEvents, [], Module, ModState) ->
+    io:format(standard_error, "Eh?  ~p~n", [Event]),
+    loop(LVT, T, PastEvents, [], Module, ModState);
+
 loop(LVT, Events, PastEvents, PendingAcks, Module, ModState) ->
-    AddEvents = drain_msgq(infinity),
-    NewEvents = ordsets:union(ordsets:from_list(AddEvents, Events)),
+    NewEvents = ordsets:union(drain_msgq(infinity), Events),
     loop(LVT, NewEvents, PastEvents, PendingAcks, Module, ModState).
 
 handle_event(LVT, #event{lvt=EventLVT, payload=Payload}, Module, ModuleState) ->
