@@ -1,0 +1,5 @@
+{application, tw_actor, [
+	{description, "Timewarp Enabled Actor"},
+	{vsn, "0.0.1"},
+	{modules, [tw_actor]}
+]}.
