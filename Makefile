@@ -46,6 +46,9 @@ clean:
 .PHONY: test
 test: eunit
 
+.PHONY: check
+check: eunit
+
 .PHONY: eunit
 eunit:  rebar.config
 	LD_LIBRARY_PATH=$(LD_LIBRARY_PATH) ERL_FLAGS=$(ERL_FLAGS) $(REBAR) eunit verbose=1 $(APPS_OPT) $(SUITES:%=suites=%) $(TESTS:%=tests=%)

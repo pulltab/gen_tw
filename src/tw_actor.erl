@@ -4,8 +4,12 @@
 -export([spawn/2,
          spawn_link/2,
          stop/1,
-         notify/3
+         event/2,
+         antievent/1,
+         notify/2
         ]).
+
+-export_type([event/0]).
 
 -export([init/4]).
 
@@ -24,6 +28,8 @@
      payload        %% Event payload
     }).
 
+-opaque event() :: #event{}.
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -41,17 +47,28 @@ spawn_link(Module, Args) ->
 stop(Pid) ->
     exit(Pid, normal).
 
--spec notify(pid(), integer(), term()) -> ok.
-notify(Ref, LVT, Payload) ->
-    Event =
-        #event{
-            lvt = LVT,
-            id = make_ref(),
-            src = self(),
-            payload = Payload
-        },
-    Ref ! Event,
-    ok.
+-spec antievent(Event::event()) -> event().
+antievent(Event=#event{}) ->
+    Event#event{
+        anti = -1,
+        src = self()
+    }.
+
+-spec event(integer(), term()) -> event().
+event(LVT, Payload) ->
+    #event{
+        lvt = LVT,
+        id = make_ref(),
+        src = self(),
+        payload=Payload
+    }.
+
+-spec notify(pid(), event()|list(event())) -> ok.
+notify(Ref, Events) when is_list(Events) ->
+    Ref ! Events,
+    ok;
+notify(Ref, Event) when is_record(Event, event) ->
+    notify(Ref, [Event]).
 
 %%%===================================================================
 %%% Internals
@@ -71,11 +88,14 @@ init(Parent, InitialLVT, Module, Args) ->
 -spec drain_msgq(Events::list(#event{}), TMO::integer()) -> ordsets:ordset(#event{}).
 drain_msgq(Events, TMO) ->
     receive
+        NewEvents when is_list(NewEvents) ->
+            drain_msgq(NewEvents ++ Events, 0);
+
         EventOrAntievent when is_record(EventOrAntievent, event) ->
             drain_msgq([EventOrAntievent | Events], 0);
 
         Msg ->
-            error_logger:warning("~p discarding msg: ~p~n", [?MODULE, Msg])
+            error_logger:warning_msg("~p discarding msg: ~p~n", [?MODULE, Msg])
 
     after TMO ->
         ordsets:from_list(Events)
@@ -89,14 +109,14 @@ drain_msgq(InitialTMO) ->
 tick_tock(LVT, Module, ModuleState) ->
     Module:tick_tock(LVT, ModuleState).
 
-%% No events to process and not waiting on any acks, integrate ourselves forward in time.
+%% No events to process and not waiting on any acks, integrate ourselves forward in time.
 loop(LVT, _Events = [], PastEvents, _PendingAcks = [], Module, ModState) ->
     case drain_msgq(0) of
         [] ->
             {NewLVT, NewModState} = tick_tock(LVT, Module, ModState),
             loop(NewLVT, [], PastEvents, [], Module, NewModState);
         Events ->
-            loop(LVT, ordset:from_list(Events), PastEvents, [], Module, ModState)
+            loop(LVT, Events, PastEvents, [], Module, ModState)
     end;
 
 %% Acknowledgement of an event we sent.  Forcibly remove from PendingAcks.
