@@ -9,7 +9,7 @@
          notify/2
         ]).
 
--export_type([event/0]).
+-export_type([ref/0, event/0]).
 
 -export([init/4]).
 
@@ -28,18 +28,19 @@
      payload        %% Event payload
     }).
 
+-opaque ref() :: pid().
 -opaque event() :: #event{}.
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
--spec spawn(atom(), [term()]) -> {ok, pid()}.
+-spec spawn(atom(), [term()]) -> {ok, ref()}.
 spawn(Module, Args) ->
     Pid = proc_lib:spawn(?MODULE, init, [self(), 0, Module, Args]),
     {ok, Pid}.
 
--spec spawn_link(atom(), [term()]) -> {ok, pid()}.
+-spec spawn_link(atom(), [term()]) -> {ok, ref()}.
 spawn_link(Module, Args) ->
     Pid = proc_lib:spawn_link(?MODULE, init, [self(), 0, Module, Args]),
     {ok, Pid}.
@@ -63,7 +64,7 @@ event(LVT, Payload) ->
         payload=Payload
     }.
 
--spec notify(pid(), event()|list(event())) -> ok.
+-spec notify(ref(), event()|list(event())) -> ok.
 notify(Ref, Events) when is_list(Events) ->
     Ref ! Events,
     ok;
@@ -128,7 +129,7 @@ loop(LVT, [#ack{id=AckID} | T], PastEvents, PendingAcks, Module, ModState) ->
 %% Add any new pending ACKs to the list we are already waiting for.
 loop(LVT, Events = [_PastEvent = #event{lvt=ELVT}|_], PendingAcks, PastEvents, Module, ModState) when ELVT < LVT ->
     %%TODO:  Rollback
-    loop(LVT, Events, PastEvents, PendingAcks, Module, ModState);
+    loop(ELVT, Events, PastEvents, PendingAcks, Module, ModState);
 
 %% Antievent and events meeting in Events cancel each other
 %% out.  Note:  We are relying on antievents appearing in the ordering first.
