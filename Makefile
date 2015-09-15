@@ -17,7 +17,7 @@ ERL_FLAGS_Q     := # -env ERL_MAX_PORTS 65536 # 1048576 # 134217727 # +Q 1342177
 ERL_FLAGS_rg    := # +rg 1 # 1024/64
 ERL_FLAGS       := "$(ERL_FLAGS_A) $(ERL_FLAGS_a) $(ERL_FLAGS_K) $(ERL_FLAGS_P) $(ERL_FLAGS_Q) $(ERL_FLAGS_rg)"
 
-APPS_OPT	:= apps=tw_actor
+APPS_OPT	:= apps=gen_tw
 
 .DEFAULT_GOAL   := all
 
@@ -51,7 +51,7 @@ check: eunit
 
 .PHONY: eunit
 eunit:  rebar.config
-	LD_LIBRARY_PATH=$(LD_LIBRARY_PATH) ERL_FLAGS=$(ERL_FLAGS) $(REBAR) eunit verbose=1 $(APPS_OPT) $(SUITES:%=suites=%) $(TESTS:%=tests=%)
+	$(REBAR) eunit $(APPS_OPT) $(SUITES:%=suites=%) $(TESTS:%=tests=%)
 
 .PHONY: deps
 deps: get-deps

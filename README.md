@@ -1,2 +1,2 @@
-[![Build Status](https://travis-ci.org/pulltab/tw_actor.svg?branch=master)](https://travis-ci.org/pulltab/tw_actor)
+[![Build Status](https://travis-ci.org/pulltab/gen_tw.svg?branch=master)](https://travis-ci.org/pulltab/gen_tw)
 

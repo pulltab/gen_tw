@@ -1,5 +1,5 @@
-{application, tw_actor, [
+{application, gen_tw, [
 	{description, "Timewarp Enabled Actor"},
 	{vsn, "0.0.1"},
-	{modules, [tw_actor]}
+	{modules, [gen_tw]}
 ]}.

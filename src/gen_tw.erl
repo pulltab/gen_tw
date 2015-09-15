@@ -1,0 +1,228 @@
+-module(gen_tw).
+
+%% API
+-export([spawn/2,
+         spawn_link/2,
+         stop/1,
+         event/2,
+         antievent/1,
+         notify/2,
+         rollback/2
+        ]).
+
+-export_type([ref/0, event/0]).
+
+-export([init/4]).
+
+-callback init() -> {ok, InitialState::term()} | {error, Reason::term()}.
+-callback tick_tock(CurrentLVT::integer(), State::term()) -> {NextLVT::integer(), NextState::term()}.
+-callback handle_event(CurrentLVT::integer(), EventLVT::integer(), Event::term(), ModuleState::term()) ->
+    {ok, NextState::term()} |
+    {error, Reason::term()}.
+
+-record(event,
+    {lvt,           %% Simulation time the event is to be applied
+     id,            %% Unique identifier for the event
+     anti = 0,      %% 0 for event, -1 for antievent
+     src,           %% Originating pid
+     payload        %% Event payload
+    }).
+
+-opaque ref() :: pid().
+-opaque event() :: #event{}.
+
+%%%===================================================================
+%%% API
+%%%===================================================================
+
+-spec spawn(atom(), [term()]) -> {ok, ref()}.
+spawn(Module, Args) ->
+    Pid = proc_lib:spawn(?MODULE, init, [self(), 0, Module, Args]),
+    {ok, Pid}.
+
+-spec spawn_link(atom(), [term()]) -> {ok, ref()}.
+spawn_link(Module, Args) ->
+    Pid = proc_lib:spawn_link(?MODULE, init, [self(), 0, Module, Args]),
+    {ok, Pid}.
+
+-spec stop(ref()) -> ok.
+stop(Pid) ->
+    exit(Pid, normal).
+
+-spec antievent(Event::event()) -> event().
+antievent(Event=#event{}) ->
+    Event#event{
+        anti = -1,
+        src = self()
+    }.
+
+-spec event(integer(), term()) -> event().
+event(LVT, Payload) ->
+    #event{
+        lvt = LVT,
+        id = make_ref(),
+        src = self(),
+        payload=Payload
+    }.
+
+-spec notify(ref(), event()|list(event())) -> ok.
+notify(Ref, Events) when is_list(Events) ->
+    Ref ! Events,
+    ok;
+notify(Ref, Event) when is_record(Event, event) ->
+    notify(Ref, [Event]).
+
+%%%===================================================================
+%%% Internals
+%%%===================================================================
+
+-spec init(pid(), integer(), atom(), list(term())) -> no_return().
+init(Parent, InitialLVT, Module, Args) ->
+    case erlang:apply(Module, init, Args) of
+        {ok, ModuleState} ->
+            proc_lib:init_ack(Parent, {ok, self()}),
+            loop(InitialLVT, [], [], Module, [{InitialLVT, ModuleState}]);
+
+        Error ->
+            exit(Error)
+    end.
+
+-spec drain_msgq(Events::list(#event{}), TMO::integer()) -> ordsets:ordset(#event{}).
+drain_msgq(Events, TMO) ->
+    receive
+        NewEvents when is_list(NewEvents) ->
+            drain_msgq(NewEvents ++ Events, 0);
+
+        EventOrAntievent when is_record(EventOrAntievent, event) ->
+            drain_msgq([EventOrAntievent | Events], 0);
+
+        Msg ->
+            error_logger:warning_msg("~p discarding msg: ~p~n", [?MODULE, Msg])
+
+    after TMO ->
+        ordsets:from_list(Events)
+    end.
+
+-spec drain_msgq(TMO::integer()) -> ordsets:ordset(#event{}).
+drain_msgq(InitialTMO) ->
+    drain_msgq([], InitialTMO).
+
+-spec append_state(integer(), term(), list({integer(), term()})) -> list({integer(), term()}).
+append_state(LVT, State, []) ->
+    [{LVT, State}];
+append_state(LVT, NewState, [{LVT, _OldState}|T]) ->
+    [{LVT, NewState}|T];
+append_state(NewLVT, NewState, OldStates = [{OldLVT, _}|_]) when NewLVT > OldLVT ->
+    [{NewLVT, NewState}|OldStates].
+
+-spec tick_tock(integer(), atom(), term()) -> {integer(), term()}.
+tick_tock(LVT, Module, ModuleState) ->
+    Module:tick_tock(LVT, ModuleState).
+
+-spec loop(integer(), list(#event{}), list(#event{}), atom(), list({integer(), term()})) -> no_return().
+%% No events to process and not waiting on any acks, integrate ourselves forward in time.
+loop(LVT, _Events = [], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
+    case drain_msgq(0) of
+        [] ->
+            {NewLVT, NewModState} = tick_tock(LVT, Module, ModState),
+            loop(NewLVT, [], PastEvents, Module, append_state(NewLVT, NewModState, ModStates));
+        Events ->
+            loop(LVT, Events, PastEvents, Module, ModStates)
+    end;
+
+%% First event in queue occurs before LVT.  Rollback to handle the event.
+%%
+%% Note:  This clause must applied before applying other rules such as
+%% antievent/event cancellation.
+loop(LVT, Events=[#event{lvt=ELVT}|_], PastEvents, Module, ModStates) when ELVT < LVT ->
+    {Replay, NewPastEvents} = rollback(ELVT, PastEvents),
+    NewEvents = ordsets:union(Replay, Events),
+    NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT >= ELVT end, ModStates),
+    loop(ELVT, NewEvents, NewPastEvents, Module, NewModStates);
+
+%% Antievent and events meeting in Events cancel each other
+%% out.  Note:  We are relying on antievents appearing in the ordering first.
+%% This prevents us from having to search PastEvents for the corresponding
+%% event, in this case.
+loop(LVT, [#event{id=EID, anti=-1}|T], PastEvents, Module, ModStates) ->
+    NewEvents = [E || E <- T, E#event.id /= EID],
+    loop(LVT, NewEvents, PastEvents, Module, ModStates);
+
+%% Event at or after the current value of LVT.  Process the event by invoking
+%% Module:handle_event and looping on the new state provided.
+%%
+%% TODO:  We are currently halting on error here.  This is likely not what we
+%% want to do.
+loop(LVT, [Event = #event{lvt=ELVT}|T], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
+    case handle_event(LVT, Event, Module, ModState) of
+        {ok, NewModState} ->
+            loop(ELVT, T, [Event|PastEvents], Module, append_state(ELVT, NewModState, ModStates));
+
+        {error, Reason} ->
+            %% TODO:  This can result in deadlock
+            %% How can we more completely handle this?
+            erlang:throw(Reason)
+    end;
+
+loop(LVT, Events, PastEvents, Module, ModState) ->
+    NewEvents = ordsets:union(drain_msgq(infinity), Events),
+    loop(LVT, NewEvents, PastEvents, Module, ModState).
+
+rollback(_LVT, [], NewEvents) ->
+    {NewEvents, []};
+rollback(LVT, Events=[#event{lvt=ELVT}|_], NewEvents) when LVT > ELVT ->
+    {NewEvents, Events};
+rollback(LVT, [Event|T], NewEvents) ->
+    rollback(LVT, T, [Event|NewEvents]).
+
+rollback(LVT, Events) when is_integer(LVT) andalso LVT >= 0 ->
+    rollback(LVT, Events, []).
+
+handle_event(LVT, #event{lvt=EventLVT, payload=Payload}, Module, ModuleState) ->
+    Module:handle_event(LVT, EventLVT, Payload, ModuleState).
+
+%%%===================================================================
+%%% Unit Tests
+%%%===================================================================
+
+-include_lib("eunit/include/eunit.hrl").
+
+append_state_test() ->
+    T1 = append_state(0, foo, []),
+    ?assertMatch(T1, [{0, foo}]),
+
+    %% Latest states appear at the head of the list
+    T2 = append_state(2, bar, T1),
+    ?assertMatch([{2,bar} | T1], T2),
+
+    %% Updating head element replaces the old value
+    T3 = append_state(2, foobar, T2),
+    ?assertMatch([{2,foobar}|T1], T3),
+
+    %% Updating a value which is not the latest is not allowed
+    try
+        append_state(0, foobar, T2),
+        ?assert(false)
+    catch
+        _:_ ->
+            ok
+    end.
+
+rollback_test() ->
+    InOrder = [event(LVT, <<>>) || LVT <- lists:seq(100,1, -1)],
+
+    ?assertMatch({[], []}, rollback(0, [])),
+    ?assertMatch({[], InOrder}, rollback(110, InOrder)),
+
+    Temp = lists:reverse(InOrder),
+    ?assertMatch({Temp, []}, rollback(0, InOrder)),
+
+    {ResultReplay, ResultPast} = rollback(50, InOrder),
+    ExpectedReplay = [E || E <- InOrder, E#event.lvt >= 50],
+    ExpectedPast = [E || E <- InOrder, E#event.lvt < 50],
+
+    ReplayDiff = ResultReplay -- ExpectedReplay,
+    PastDiff = ResultPast -- ExpectedPast,
+
+    ?assertMatch(ReplayDiff, []),
+    ?assertMatch(PastDiff, []).

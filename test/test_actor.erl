@@ -1,13 +1,13 @@
 -module(test_actor).
 
--behaviour(tw_actor).
+-behaviour(gen_tw).
 
 -export([init/0,
          tick_tock/2,
          handle_event/4]).
 
 init() ->
-    {ok, 0}.
+    {ok, #{}}.
 
 tick_tock(LVT, _State) ->
     {LVT, _State}.
