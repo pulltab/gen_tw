@@ -5,6 +5,7 @@
          spawn_link/2,
          stop/1,
          event/2,
+         event/3,
          antievent/1,
          notify/2,
          rollback/2
@@ -24,7 +25,7 @@
     {lvt,           %% Simulation time the event is to be applied
      id,            %% Unique identifier for the event
      anti = 0,      %% 0 for event, -1 for antievent
-     src,           %% Originating pid
+     link,          %% Causal link for the event (Pid)
      payload        %% Event payload
     }).
 
@@ -53,15 +54,19 @@ stop(Pid) ->
 antievent(Event=#event{}) ->
     Event#event{
         anti = -1,
-        src = self()
+        link = undefined
     }.
 
 -spec event(integer(), term()) -> event().
 event(LVT, Payload) ->
+    event(undefined, LVT, Payload).
+
+-spec event(ref(), integer(), term()) -> event().
+event(Link, LVT, Payload) ->
     #event{
         lvt = LVT,
-        id = make_ref(),
-        src = self(),
+        id = make_ref(), %%TODO Need a better mechanism for unique refs
+        link = Link,
         payload=Payload
     }.
 
@@ -135,9 +140,20 @@ loop(LVT, _Events = [], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
 %% Note:  This clause must applied before applying other rules such as
 %% antievent/event cancellation.
 loop(LVT, Events=[#event{lvt=ELVT}|_], PastEvents, Module, ModStates) when ELVT < LVT ->
-    {Replay, NewPastEvents} = rollback(ELVT, PastEvents),
-    NewEvents = ordsets:union(Replay, Events),
+    {ReplayOrUndo, NewPastEvents} = rollback(ELVT, PastEvents),
     NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT >= ELVT end, ModStates),
+
+    {Replay, Undo} = lists:partition(fun(#event{link=Link}) -> Link == undefined end, ReplayOrUndo),
+
+    %%Send antievents for all events that occured within (ELVT, LVT] that have
+    %%a causal link.
+    [begin
+        Link = Event#event.link,
+        Link ! antievent(Event)
+     end || Event <- Undo],
+
+    NewEvents = ordsets:union(Replay, Events),
+
     loop(ELVT, NewEvents, NewPastEvents, Module, NewModStates);
 
 %% Antievent and events meeting in Events cancel each other
@@ -186,6 +202,27 @@ handle_event(LVT, #event{lvt=EventLVT, payload=Payload}, Module, ModuleState) ->
 %%%===================================================================
 
 -include_lib("eunit/include/eunit.hrl").
+
+event_test() ->
+    %% 2-ary event generates non-causal event
+    E1 = event(0, <<"foo">>),
+    ?assertEqual(E1#event.link, undefined),
+    ?assertEqual(E1#event.lvt, 0),
+    ?assertEqual(E1#event.payload, <<"foo">>),
+
+    %% 3-ary event generates a causal event
+    E2 = event(self(), 10, <<"bar">>),
+    ?assertEqual(E2#event.link, self()),
+    ?assertEqual(E2#event.lvt, 10),
+    ?assertEqual(E2#event.payload, <<"bar">>).
+
+%% Antievents are non-causal
+antievent_test() ->
+    E = event(self(), 150, <<"bar">>),
+    A = antievent(E),
+
+    ?assertEqual(A#event.anti, -1),
+    ?assertEqual(A#event.link, undefined).
 
 append_state_test() ->
     T1 = append_state(0, foo, []),
