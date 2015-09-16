@@ -7,6 +7,15 @@ start_stop_test() ->
     ?assertMatch({ok, _}, Res),
     {ok, Pid} = Res,
     ?assert(is_pid(Pid)),
+
+    %% Ensure proc_lib init acks are being sent out.
+    receive
+        {ack, Pid, {ok, Pid}} ->
+            ok
+    after 100 ->
+        ?assert(false)
+    end,
+
     gen_tw:stop(Pid).
 
 tw_properties_test_() ->
@@ -14,7 +23,12 @@ tw_properties_test_() ->
         fun() ->
             ok = meck:new(test_actor, [passthrough]),
             {ok, Pid} = gen_tw:spawn_link(test_actor, []),
-            Pid
+            receive
+                {ack, _, {ok, _}} ->
+                    Pid
+            after 100 ->
+                throw({failed_to_init_test_actor})
+            end
          end,
         fun(Pid) ->
             erlang:unlink(Pid),
@@ -27,8 +41,8 @@ tw_properties_test_() ->
             fun tick_tock/1,
             fun in_order_event_processing/1,
             fun in_queue_antievent_cancels_event/1,
-            fun rollback/1
-
+            fun rollback_event_replay/1,
+            fun rollback_causal_antievents/1
         ]}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -97,7 +111,7 @@ in_queue_antievent_cancels_event(Pid) ->
     timer:sleep(100),
     ?_assert(true).
 
-rollback(Pid) ->
+rollback_event_replay(Pid) ->
     R =
         fun(LVT, ELVT, Payload, State) ->
             Rollback = erlang:get(rollback),
@@ -105,17 +119,17 @@ rollback(Pid) ->
                 <<"rollback">> when Rollback == undefined ->
                     erlang:put(rollback, true),
                     {ok, State};
-                <<"rollback">> when Rollback ->
-                    {ok, State};
+
                 _ when Rollback == undefined ->
                     {ok, State};
-                _ when Rollback ->
-                    case ELVT == LVT + 1 of
-                        true ->
-                            {ok, State};
-                        false ->
-                            exit({should_not_be_reached, LVT, ELVT})
-                    end
+
+                <<"rollback">> ->
+                    {ok, State};
+
+                _ when (ELVT == LVT + 1)->
+                    {ok, State};
+                _ ->
+                    exit({should_not_be_reached, LVT, ELVT})
             end
         end,
 
@@ -129,4 +143,36 @@ rollback(Pid) ->
 
     gen_tw:notify(Pid, gen_tw:event(0,<<"rollback">>)),
 
+    timer:sleep(100),
+
     ?_assert(true).
+
+rollback_casual_antievents_recv(LVT) ->
+    receive
+        {event, 100, _, -1, _, _} ->
+            ?_assert(true);
+
+        {event, LVT, _, -1, _, _} when LVT < 100 ->
+            rollback_casual_antievents_recv(LVT+1);
+
+        _Event ->
+            exit({unexpected_antievent, LVT, _Event})
+    end.
+
+ rollback_causal_antievents(Pid) ->
+    F =
+        fun(_LVT, _ELVT, _Payload, State) ->
+            {ok, State}
+        end,
+
+    meck:expect(test_actor, handle_event, F),
+
+    Events = [gen_tw:event(self(), ELVT, <<>>) || ELVT <- lists:seq(1, 100)],
+    gen_tw:notify(Pid, Events),
+
+    timer:sleep(100),
+
+    RBEvent = gen_tw:event(self(), 1, <<"rollback">>),
+    gen_tw:notify(Pid, RBEvent),
+
+    rollback_casual_antievents_recv(1).

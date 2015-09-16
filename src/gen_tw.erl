@@ -4,6 +4,7 @@
 -export([spawn/2,
          spawn_link/2,
          stop/1,
+         gvt/2,
          event/2,
          event/3,
          antievent/1,
@@ -32,6 +33,8 @@
 -opaque ref() :: pid().
 -opaque event() :: #event{}.
 
+-define(GVT_UPDATE_PAYLOAD, '$gvt').
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -49,6 +52,10 @@ spawn_link(Module, Args) ->
 -spec stop(ref()) -> ok.
 stop(Pid) ->
     exit(Pid, normal).
+
+-spec gvt(ref(), integer()) -> ok.
+gvt(Pid, GVT) when is_integer(GVT) andalso GVT >= 0 ->
+    notify(Pid, event(GVT, ?GVT_UPDATE_PAYLOAD)).
 
 -spec antievent(Event::event()) -> event().
 antievent(Event=#event{}) ->
@@ -125,7 +132,7 @@ tick_tock(LVT, Module, ModuleState) ->
     Module:tick_tock(LVT, ModuleState).
 
 -spec loop(integer(), list(#event{}), list(#event{}), atom(), list({integer(), term()})) -> no_return().
-%% No events to process and not waiting on any acks, integrate ourselves forward in time.
+%% No events to process, advance our local virtual time.
 loop(LVT, _Events = [], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
     case drain_msgq(0) of
         [] ->
@@ -135,13 +142,25 @@ loop(LVT, _Events = [], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
             loop(LVT, Events, PastEvents, Module, ModStates)
     end;
 
+%% GVT Update.  We are guaranteed to never rollback to a time previous to this
+%% time value, thus, we can safely garbage collect ModStates and PastEvents occuring
+%% before GVT.
+%%
+%% NOTE:  We make no attempt to calculate GVT amongst gen_tw actors.  This is
+%% the responsibility of a system higher up the application stack.
+loop(LVT, _Events=[#event{lvt=GVT, payload=?GVT_UPDATE_PAYLOAD}|T], PastEvents, Module, ModStates) when LVT >= GVT ->
+    NewModStates = [{ModLVT, ModState} || {ModLVT, ModState} <- ModStates, ModLVT >= GVT],
+    NewPastEvents = [E || E<-PastEvents, E#event.lvt >= GVT],
+    erlang:garbage_collect(),
+    loop(LVT, T, NewPastEvents, Module, NewModStates);
+
 %% First event in queue occurs before LVT.  Rollback to handle the event.
 %%
 %% Note:  This clause must applied before applying other rules such as
 %% antievent/event cancellation.
 loop(LVT, Events=[#event{lvt=ELVT}|_], PastEvents, Module, ModStates) when ELVT < LVT ->
     {ReplayOrUndo, NewPastEvents} = rollback(ELVT, PastEvents),
-    NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT >= ELVT end, ModStates),
+    NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT > ELVT end, ModStates),
 
     {Replay, Undo} = lists:partition(fun(#event{link=Link}) -> Link == undefined end, ReplayOrUndo),
 
@@ -178,11 +197,7 @@ loop(LVT, [Event = #event{lvt=ELVT}|T], PastEvents, Module, ModStates=[{LVT, Mod
             %% TODO:  This can result in deadlock
             %% How can we more completely handle this?
             erlang:throw(Reason)
-    end;
-
-loop(LVT, Events, PastEvents, Module, ModState) ->
-    NewEvents = ordsets:union(drain_msgq(infinity), Events),
-    loop(LVT, NewEvents, PastEvents, Module, ModState).
+    end.
 
 rollback(_LVT, [], NewEvents) ->
     {NewEvents, []};
