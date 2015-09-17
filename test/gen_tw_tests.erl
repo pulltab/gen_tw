@@ -147,19 +147,21 @@ rollback_event_replay(Pid) ->
 
     ?_assert(true).
 
-rollback_casual_antievents_recv(LVT) ->
+rollback_casual_antievents_recv(LVT, Max) ->
     receive
-        {event, 100, _, -1, _, _} ->
+        {event, Max, _, -1, _, _} ->
             ?_assert(true);
 
         {event, LVT, _, -1, _, _} when LVT < 100 ->
-            rollback_casual_antievents_recv(LVT+1);
+            rollback_casual_antievents_recv(LVT+1, Max);
 
         _Event ->
             exit({unexpected_antievent, LVT, _Event})
     end.
 
  rollback_causal_antievents(Pid) ->
+    StartLVT = 1,
+    EndLVT = 100,
     F =
         fun(_LVT, _ELVT, _Payload, State) ->
             {ok, State}
@@ -167,12 +169,17 @@ rollback_casual_antievents_recv(LVT) ->
 
     meck:expect(test_actor, handle_event, F),
 
-    Events = [gen_tw:event(self(), ELVT, <<>>) || ELVT <- lists:seq(1, 100)],
+    Events = [gen_tw:event(self(), ELVT, <<>>) || ELVT <- lists:seq(StartLVT, EndLVT)],
     gen_tw:notify(Pid, Events),
 
     timer:sleep(100),
 
-    RBEvent = gen_tw:event(self(), 1, <<"rollback">>),
+    %% Rollback to the middle
+    RollbackLVT = 49,
+    RBEvent = gen_tw:event(self(), RollbackLVT, <<"rollback">>),
     gen_tw:notify(Pid, RBEvent),
+    rollback_casual_antievents_recv(RollbackLVT, EndLVT),
 
-    rollback_casual_antievents_recv(1).
+    %% Ensure that it is safe to rollback to the beginning of time (GVT)
+    gen_tw:notify(Pid, gen_tw:event(self(), StartLVT, <<"rollback">>)),
+    rollback_casual_antievents_recv(StartLVT, RollbackLVT).
