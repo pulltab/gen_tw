@@ -16,7 +16,11 @@ start_stop_test() ->
         ?assert(false)
     end,
 
-    gen_tw:stop(Pid).
+    gen_tw:stop(Pid),
+
+    timer:sleep(100),
+
+    ?assertMatch(undefined, erlang:process_info(Pid)).
 
 tw_properties_test_() ->
     {foreach,
@@ -147,13 +151,12 @@ rollback_event_replay(Pid) ->
 
     ?_assert(true).
 
-rollback_casual_antievents_recv(LVT, Max) ->
+rollback_causal_antievents_recv(LVT, Max) when LVT > Max ->
+    ?_assert(true);
+rollback_causal_antievents_recv(LVT, Max) ->
     receive
-        {event, Max, _, -1, _, _} ->
-            ?_assert(true);
-
-        {event, LVT, _, -1, _, _} when LVT < 100 ->
-            rollback_casual_antievents_recv(LVT+1, Max);
+        {event, LVT, _, -1, _, _} ->
+            rollback_causal_antievents_recv(LVT+1, Max);
 
         _Event ->
             exit({unexpected_antievent, LVT, _Event})
@@ -178,8 +181,8 @@ rollback_casual_antievents_recv(LVT, Max) ->
     RollbackLVT = 49,
     RBEvent = gen_tw:event(self(), RollbackLVT, <<"rollback">>),
     gen_tw:notify(Pid, RBEvent),
-    rollback_casual_antievents_recv(RollbackLVT, EndLVT),
+    rollback_causal_antievents_recv(RollbackLVT, EndLVT),
 
     %% Ensure that it is safe to rollback to the beginning of time (GVT)
     gen_tw:notify(Pid, gen_tw:event(self(), StartLVT, <<"rollback">>)),
-    rollback_casual_antievents_recv(StartLVT, RollbackLVT).
+    rollback_causal_antievents_recv(StartLVT, RollbackLVT).

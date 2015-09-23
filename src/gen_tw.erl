@@ -4,6 +4,7 @@
 -export([spawn/2,
          spawn_link/2,
          stop/1,
+         stop/2,
          gvt/2,
          event/2,
          event/3,
@@ -21,6 +22,7 @@
 -callback handle_event(CurrentLVT::integer(), EventLVT::integer(), Event::term(), ModuleState::term()) ->
     {ok, NextState::term()} |
     {error, Reason::term()}.
+-callback terminate(State::term()) -> any().
 
 -record(event,
     {lvt,           %% Simulation time the event is to be applied
@@ -33,6 +35,7 @@
 -opaque ref() :: pid().
 -opaque event() :: #event{}.
 
+-define(STOP_PAYLOAD(Reason), {'$stop', Reason}).
 -define(GVT_UPDATE_PAYLOAD, '$gvt').
 
 %%%===================================================================
@@ -51,7 +54,11 @@ spawn_link(Module, Args) ->
 
 -spec stop(ref()) -> ok.
 stop(Pid) ->
-    exit(Pid, normal).
+    stop(Pid, normal).
+
+-spec stop(ref(), term()) -> ok.
+stop(Pid, Reason) ->
+    notify(Pid, event(undefined, ?STOP_PAYLOAD(Reason))).
 
 -spec gvt(ref(), integer()) -> ok.
 gvt(Pid, GVT) when is_integer(GVT) andalso GVT >= 0 ->
@@ -141,6 +148,10 @@ loop(LVT, _Events = [], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
         Events ->
             loop(LVT, Events, PastEvents, Module, ModStates)
     end;
+
+loop(_LVT, _Events = [#event{payload=?STOP_PAYLOAD(Reason)}|_], _PastEvents, Module, [{_, ModState}|_]) ->
+    Module:terminate(ModState),
+    exit(Reason);
 
 %% GVT Update.  We are guaranteed to never rollback to a time previous to this
 %% time value, thus, we can safely garbage collect ModStates and PastEvents occuring
