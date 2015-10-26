@@ -22,7 +22,7 @@ start_stop_test() ->
 
     ?assertMatch(undefined, erlang:process_info(Pid)).
 
-tw_properties_test_() ->
+tw_events_test_() ->
     {foreach,
         fun() ->
             ok = meck:new(test_actor, [passthrough]),
@@ -53,6 +53,12 @@ tw_properties_test_() ->
 %%% General Properties
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%% Event Handling
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 %% In the absence of events, time is advanced monotonically.
 tick_tock(_Pid) ->
     F =
@@ -77,10 +83,6 @@ tick_tock(_Pid) ->
 
     timer:sleep(100),
     ?_assert(true).
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%% Event Handling
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 shuffle(L) ->
     [X || {_, X} <- lists:sort([{random:uniform(), X} || X <- L])].

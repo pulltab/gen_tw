@@ -10,7 +10,8 @@
          event/3,
          antievent/1,
          notify/2,
-         rollback/2
+         rollback/2,
+         uuid/0
         ]).
 
 -export_type([ref/0, event/0]).
@@ -79,7 +80,7 @@ event(LVT, Payload) ->
 event(Link, LVT, Payload) ->
     #event{
         lvt = LVT,
-        id = make_ref(), %%TODO Need a better mechanism for unique refs
+        id = uuid(),
         link = Link,
         payload=Payload
     }.
@@ -222,6 +223,10 @@ rollback(LVT, Events) when is_integer(LVT) andalso LVT >= 0 ->
 
 handle_event(LVT, #event{lvt=EventLVT, payload=Payload}, Module, ModuleState) ->
     Module:handle_event(LVT, EventLVT, Payload, ModuleState).
+
+-spec uuid() -> [byte()].
+uuid() ->
+    uuid:uuid4().
 
 %%%===================================================================
 %%% Unit Tests
