@@ -14,27 +14,44 @@
          uuid/0
         ]).
 
--export_type([ref/0, event/0]).
+-export_type([ref/0, event/0, virtual_time/0]).
 
 -export([init/4]).
 
 -callback init(Arg::term()) -> {ok, InitialState::term()} | {error, Reason::term()}.
--callback tick_tock(CurrentLVT::integer(), State::term()) -> {NextLVT::integer(), NextState::term()}.
--callback handle_event(CurrentLVT::integer(), EventLVT::integer(), Event::term(), ModuleState::term()) ->
+
+-callback tick_tock(CurrentLVT::virtual_time(), State::term()) -> {NextLVT::virtual_time(), NextState::term()}.
+-callback handle_event(CurrentLVT::virtual_time(), EventLVT::virtual_time(), Event::term(), ModuleState::term()) ->
     {ok, NextState::term()} |
     {error, Reason::term()}.
 -callback terminate(State::term()) -> any().
 
 -record(event,
-    {lvt,           %% Simulation time the event is to be applied
-     id,            %% Unique identifier for the event
-     anti = 0,      %% 0 for event, -1 for antievent
-     link,          %% Causal link for the event (Pid)
-     payload        %% Event payload
+    {lvt     :: virtual_time(),    %% Simulation time the event is to be applied
+     id      :: uuid:uuid(),       %% Unique identifier for the event
+     anti    :: boolean(),         %% false for event, true for antievent
+     link    :: ref() | undefined, %% Causal link for the event (Pid)
+     payload :: term()             %% Event payload
     }).
+
+%% Invariant: The list contains no duplicates, and the events are sorted by
+%% increasing LVT.
+-type event_list() :: [#event{}].
+
+%% Invariant: The list contains no duplicates, and the events are sorted by
+%% decreasing LVT.
+-type past_event_list() :: [#event{}].
+
+-type module_state() :: {virtual_time(), term()}.
+
+%% List of past states of client module.
+%%
+%% Invariant: The LVTs are unique and sorted in descending order.
+-type module_state_list() :: [module_state()].
 
 -opaque ref() :: pid().
 -opaque event() :: #event{}.
+-type virtual_time() :: integer().
 
 -define(STOP_PAYLOAD(Reason), {'$stop', Reason}).
 -define(GVT_UPDATE_PAYLOAD, '$gvt').
@@ -68,24 +85,25 @@ gvt(Pid, GVT) when is_integer(GVT) andalso GVT >= 0 ->
 -spec antievent(Event::event()) -> event().
 antievent(Event=#event{}) ->
     Event#event{
-        anti = -1,
+        anti = true,
         link = undefined
     }.
 
--spec event(integer(), term()) -> event().
+-spec event(virtual_time(), term()) -> event().
 event(LVT, Payload) ->
     event(undefined, LVT, Payload).
 
--spec event(ref(), integer(), term()) -> event().
+-spec event(ref() | undefined, virtual_time(), term()) -> event().
 event(Link, LVT, Payload) ->
     #event{
-        lvt = LVT,
-        id = uuid(),
-        link = Link,
-        payload=Payload
+        lvt     = LVT,
+        id      = uuid(),
+        anti    = false,
+        link    = Link,
+        payload = Payload
     }.
 
--spec notify(ref(), event()|list(event())) -> ok.
+-spec notify(ref(), event() | [event()]) -> ok.
 notify(Ref, Events) when is_list(Events) ->
     Ref ! Events,
     ok;
@@ -96,7 +114,7 @@ notify(Ref, Event) when is_record(Event, event) ->
 %%% Internals
 %%%===================================================================
 
--spec init(pid(), integer(), atom(), term()) -> no_return().
+-spec init(pid(), virtual_time(), atom(), term()) -> no_return().
 init(Parent, InitialLVT, Module, Arg) ->
     case erlang:apply(Module, init, [Arg]) of
         {ok, ModuleState} ->
@@ -107,7 +125,7 @@ init(Parent, InitialLVT, Module, Arg) ->
             exit(Error)
     end.
 
--spec drain_msgq(Events::list(#event{}), TMO::integer()) -> ordsets:ordset(#event{}).
+-spec drain_msgq(Events::event_list(), TMO::integer()) -> event_list().
 drain_msgq(Events, TMO) ->
     receive
         NewEvents when is_list(NewEvents) ->
@@ -123,11 +141,11 @@ drain_msgq(Events, TMO) ->
         ordsets:from_list(Events)
     end.
 
--spec drain_msgq(TMO::integer()) -> ordsets:ordset(#event{}).
+-spec drain_msgq(TMO::integer()) -> event_list().
 drain_msgq(InitialTMO) ->
     drain_msgq([], InitialTMO).
 
--spec append_state(integer(), term(), list({integer(), term()})) -> list({integer(), term()}).
+-spec append_state(virtual_time(), term(), module_state_list()) -> module_state_list().
 append_state(LVT, State, []) ->
     [{LVT, State}];
 append_state(LVT, NewState, [{LVT, _OldState}|T]) ->
@@ -135,11 +153,11 @@ append_state(LVT, NewState, [{LVT, _OldState}|T]) ->
 append_state(NewLVT, NewState, OldStates = [{OldLVT, _}|_]) when NewLVT > OldLVT ->
     [{NewLVT, NewState}|OldStates].
 
--spec tick_tock(integer(), atom(), term()) -> {integer(), term()}.
+-spec tick_tock(virtual_time(), atom(), term()) -> module_state().
 tick_tock(LVT, Module, ModuleState) ->
     Module:tick_tock(LVT, ModuleState).
 
--spec loop(integer(), list(#event{}), list(#event{}), atom(), list({integer(), term()})) -> no_return().
+-spec loop(virtual_time(), event_list(), past_event_list(), atom(), module_state_list()) -> no_return().
 %% No events to process, advance our local virtual time.
 loop(LVT, _Events = [], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
     case drain_msgq(0) of
@@ -172,7 +190,6 @@ loop(LVT, _Events=[#event{lvt=GVT, payload=?GVT_UPDATE_PAYLOAD}|T], PastEvents, 
 %% antievent/event cancellation.
 loop(LVT, Events=[#event{lvt=ELVT}|_], PastEvents, Module, ModStates) when ELVT < LVT ->
     {ReplayOrUndo, NewPastEvents} = rollback(ELVT, PastEvents),
-    NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT > ELVT end, ModStates),
 
     {Replay, Undo} = lists:partition(fun(#event{link=Link}) -> Link == undefined end, ReplayOrUndo),
 
@@ -184,14 +201,14 @@ loop(LVT, Events=[#event{lvt=ELVT}|_], PastEvents, Module, ModStates) when ELVT 
      end || Event <- Undo],
 
     NewEvents = ordsets:union(Replay, Events),
-
+    NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT > ELVT end, ModStates),
     loop(ELVT, NewEvents, NewPastEvents, Module, NewModStates);
 
 %% Antievent and events meeting in Events cancel each other
 %% out.  Note:  We are relying on antievents appearing in the ordering first.
 %% This prevents us from having to search PastEvents for the corresponding
 %% event, in this case.
-loop(LVT, [#event{id=EID, anti=-1}|T], PastEvents, Module, ModStates) ->
+loop(LVT, [#event{id=EID, anti=true}|T], PastEvents, Module, ModStates) ->
     NewEvents = [E || E <- T, E#event.id /= EID],
     loop(LVT, NewEvents, PastEvents, Module, ModStates);
 
@@ -200,7 +217,7 @@ loop(LVT, [#event{id=EID, anti=-1}|T], PastEvents, Module, ModStates) ->
 %%
 %% TODO:  We are currently halting on error here.  This is likely not what we
 %% want to do.
-loop(LVT, [Event = #event{lvt=ELVT}|T], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
+loop(_LVT, [Event = #event{lvt=ELVT}|T], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
     case handle_event(LVT, Event, Module, ModState) of
         {ok, NewModState} ->
             loop(ELVT, T, [Event|PastEvents], Module, append_state(ELVT, NewModState, ModStates));
@@ -211,6 +228,11 @@ loop(LVT, [Event = #event{lvt=ELVT}|T], PastEvents, Module, ModStates=[{LVT, Mod
             erlang:throw(Reason)
     end.
 
+%% Partition past events into two lists: events othat occurred before the given
+%% LVT, and events that occurred at or after the given LVT.
+%%
+%% e.g. if LVT = 2, [3,2,1,0] becomes {[1,0], [2,3]}
+-spec rollback(virtual_time(), past_event_list(), event_list()) -> {event_list(), past_event_list()}.
 rollback(_LVT, [], NewEvents) ->
     {NewEvents, []};
 rollback(LVT, Events=[#event{lvt=ELVT}|_], NewEvents) when LVT > ELVT ->
@@ -218,13 +240,14 @@ rollback(LVT, Events=[#event{lvt=ELVT}|_], NewEvents) when LVT > ELVT ->
 rollback(LVT, [Event|T], NewEvents) ->
     rollback(LVT, T, [Event|NewEvents]).
 
+-spec rollback(virtual_time(), past_event_list()) -> {event_list(), past_event_list()}.
 rollback(LVT, Events) when is_integer(LVT) andalso LVT >= 0 ->
     rollback(LVT, Events, []).
 
 handle_event(LVT, #event{lvt=EventLVT, payload=Payload}, Module, ModuleState) ->
     Module:handle_event(LVT, EventLVT, Payload, ModuleState).
 
--spec uuid() -> [byte()].
+-spec uuid() -> uuid:uuid().
 uuid() ->
     uuid:uuid4().
 
@@ -252,7 +275,7 @@ antievent_test() ->
     E = event(self(), 150, <<"bar">>),
     A = antievent(E),
 
-    ?assertEqual(A#event.anti, -1),
+    ?assertEqual(A#event.anti, true),
     ?assertEqual(A#event.link, undefined).
 
 append_state_test() ->
