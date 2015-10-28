@@ -27,11 +27,11 @@
 -callback terminate(State::term()) -> any().
 
 -record(event,
-    {lvt     :: virtual_time(),    %% Simulation time the event is to be applied
-     id      :: uuid:uuid(),       %% Unique identifier for the event
-     anti    :: boolean(),         %% false for event, true for antievent
-     link    :: ref() | undefined, %% Causal link for the event (Pid)
-     payload :: term()             %% Event payload
+    {lvt      :: virtual_time(),    %% Simulation time the event is to be applied
+     id       :: uuid:uuid(),       %% Unique identifier for the event
+     not_anti :: boolean(),         %% true for event, false for antievent
+     link     :: ref() | undefined, %% Causal link for the event (Pid)
+     payload  :: term()             %% Event payload
     }).
 
 %% Invariant: The list contains no duplicates, and the events are sorted by
@@ -85,7 +85,7 @@ gvt(Pid, GVT) when is_integer(GVT) andalso GVT >= 0 ->
 -spec antievent(Event::event()) -> event().
 antievent(Event=#event{}) ->
     Event#event{
-        anti = true,
+        not_anti = false,
         link = undefined
     }.
 
@@ -96,11 +96,11 @@ event(LVT, Payload) ->
 -spec event(ref() | undefined, virtual_time(), term()) -> event().
 event(Link, LVT, Payload) ->
     #event{
-        lvt     = LVT,
-        id      = uuid(),
-        anti    = false,
-        link    = Link,
-        payload = Payload
+        lvt      = LVT,
+        id       = uuid(),
+        not_anti = true,
+        link     = Link,
+        payload  = Payload
     }.
 
 -spec notify(ref(), event() | [event()]) -> ok.
@@ -208,7 +208,7 @@ loop(LVT, Events=[#event{lvt=ELVT}|_], PastEvents, Module, ModStates) when ELVT 
 %% out.  Note:  We are relying on antievents appearing in the ordering first.
 %% This prevents us from having to search PastEvents for the corresponding
 %% event, in this case.
-loop(LVT, [#event{id=EID, anti=true}|T], PastEvents, Module, ModStates) ->
+loop(LVT, [#event{id=EID, not_anti=false}|T], PastEvents, Module, ModStates) ->
     NewEvents = [E || E <- T, E#event.id /= EID],
     loop(LVT, NewEvents, PastEvents, Module, ModStates);
 
@@ -275,7 +275,7 @@ antievent_test() ->
     E = event(self(), 150, <<"bar">>),
     A = antievent(E),
 
-    ?assertEqual(A#event.anti, true),
+    ?assertEqual(A#event.not_anti, false),
     ?assertEqual(A#event.link, undefined).
 
 append_state_test() ->

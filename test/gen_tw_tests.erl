@@ -157,7 +157,7 @@ rollback_causal_antievents_recv(LVT, Max) when LVT > Max ->
     ?_assert(true);
 rollback_causal_antievents_recv(LVT, Max) ->
     receive
-        {event, LVT, _, -1, _, _} ->
+        {event, LVT, _, false, _, _} ->
             rollback_causal_antievents_recv(LVT+1, Max);
 
         _Event ->
