@@ -2,12 +2,12 @@
 
 -behaviour(gen_tw).
 
--export([init/0,
+-export([init/1,
          tick_tock/2,
          handle_event/4,
          terminate/1]).
 
-init() ->
+init(_) ->
     {ok, #{}}.
 
 tick_tock(LVT, _State) ->

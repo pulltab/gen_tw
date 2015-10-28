@@ -18,7 +18,7 @@
 
 -export([init/4]).
 
--callback init() -> {ok, InitialState::term()} | {error, Reason::term()}.
+-callback init(Arg::term()) -> {ok, InitialState::term()} | {error, Reason::term()}.
 -callback tick_tock(CurrentLVT::integer(), State::term()) -> {NextLVT::integer(), NextState::term()}.
 -callback handle_event(CurrentLVT::integer(), EventLVT::integer(), Event::term(), ModuleState::term()) ->
     {ok, NextState::term()} |
@@ -43,14 +43,14 @@
 %%% API
 %%%===================================================================
 
--spec spawn(atom(), [term()]) -> {ok, ref()}.
-spawn(Module, Args) ->
-    Pid = proc_lib:spawn(?MODULE, init, [self(), 0, Module, Args]),
+-spec spawn(atom(), term()) -> {ok, ref()}.
+spawn(Module, Arg) ->
+    Pid = proc_lib:spawn(?MODULE, init, [self(), 0, Module, Arg]),
     {ok, Pid}.
 
--spec spawn_link(atom(), [term()]) -> {ok, ref()}.
-spawn_link(Module, Args) ->
-    Pid = proc_lib:spawn_link(?MODULE, init, [self(), 0, Module, Args]),
+-spec spawn_link(atom(), term()) -> {ok, ref()}.
+spawn_link(Module, Arg) ->
+    Pid = proc_lib:spawn_link(?MODULE, init, [self(), 0, Module, Arg]),
     {ok, Pid}.
 
 -spec stop(ref()) -> ok.
@@ -96,9 +96,9 @@ notify(Ref, Event) when is_record(Event, event) ->
 %%% Internals
 %%%===================================================================
 
--spec init(pid(), integer(), atom(), list(term())) -> no_return().
-init(Parent, InitialLVT, Module, Args) ->
-    case erlang:apply(Module, init, Args) of
+-spec init(pid(), integer(), atom(), term()) -> no_return().
+init(Parent, InitialLVT, Module, Arg) ->
+    case erlang:apply(Module, init, [Arg]) of
         {ok, ModuleState} ->
             proc_lib:init_ack(Parent, {ok, self()}),
             loop(InitialLVT, [], [], Module, [{InitialLVT, ModuleState}]);
