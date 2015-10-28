@@ -46,7 +46,8 @@ tw_events_test_() ->
             fun in_order_event_processing/1,
             fun in_queue_antievent_cancels_event/1,
             fun rollback_event_replay/1,
-            fun rollback_causal_antievents/1
+            fun rollback_causal_antievents/1,
+            fun rollback_skip_modstate/1
         ]}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -153,11 +154,37 @@ rollback_event_replay(Pid) ->
 
     ?_assert(true).
 
+rollback_skip_modstate(Pid) ->
+    Self = self(),
+    Ref = make_ref(),
+    meck:expect(test_actor, handle_event,
+        fun(LVT, ELVT, _Payload, State) ->
+            %% Send the LVT and ELVT back to the unit test.
+            Self ! {Ref, LVT, ELVT},
+            {ok, State}
+        end),
+
+    %% Send an event at T=0 - expect the actor to advance from 0 to 0.
+    gen_tw:notify(Pid, gen_tw:event(0, <<>>)),
+    receive {Ref, 0, 0} -> ok after 1000 -> ?assert(false) end,
+
+    %% Send an event at T=2 - expect the actor to advance from 0 to 2.
+    gen_tw:notify(Pid, gen_tw:event(2, <<>>)),
+    receive {Ref, 0, 2} -> ok after 100 -> ?assert(false) end,
+
+    %% Send an event at T=1 - roll back and expect the actor to advance from 0
+    %% to 1, then 1 to 2.
+    gen_tw:notify(Pid, gen_tw:event(1, <<>>)),
+    receive {Ref, 0, 1} -> ok after 100 -> ?assert(false) end,
+    receive {Ref, 1, 2} -> ok after 100 -> ?assert(false) end,
+
+    ?_assert(true).
+
 rollback_causal_antievents_recv(LVT, Max) when LVT > Max ->
     ?_assert(true);
 rollback_causal_antievents_recv(LVT, Max) ->
     receive
-        {event, LVT, _, -1, _, _} ->
+        {event, LVT, _, false, _, _} ->
             rollback_causal_antievents_recv(LVT+1, Max);
 
         _Event ->
