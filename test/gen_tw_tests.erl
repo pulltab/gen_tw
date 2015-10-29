@@ -46,6 +46,7 @@ tw_events_test_() ->
             fun in_order_event_processing/1,
             fun in_queue_antievent_cancels_event/1,
             fun rollback_event_replay/1,
+            fun rollback_antievent/1,
             fun rollback_causal_antievents/1,
             fun rollback_skip_modstate/1
         ]}.
@@ -180,11 +181,43 @@ rollback_skip_modstate(Pid) ->
 
     ?_assert(true).
 
-rollback_causal_antievents_recv(LVT, Max) when LVT > Max ->
+rollback_antievent(Pid) ->
+    StartLVT = 1,
+    EndLVT = 100,
+    F =
+        fun(_LVT, ELVT, _Payload, State) ->
+            ets:update_counter(rollback_antievent, ELVT, {2, 1}, {count, 0}),
+            {ok, State}
+        end,
+
+    rollback_antievent = ets:new(rollback_antievent, [named_table, public]),
+
+    meck:expect(test_actor, handle_event, F),
+
+    Events = [gen_tw:event(ELVT, <<>>) || ELVT <- lists:seq(StartLVT, EndLVT)],
+    gen_tw:notify(Pid, Events),
+
+    timer:sleep(100),
+
+    %% Rollback to the middle
+    RollbackLVT = 49,
+    RBEvent1 = gen_tw:antievent(lists:nth(RollbackLVT, Events)),
+    gen_tw:notify(Pid, RBEvent1),
+
+    %% Ensure that it is safe to rollback to the beginning of time (GVT)
+    [FirstEvent|_] = Events,
+    gen_tw:notify(Pid, gen_tw:antievent(FirstEvent)),
+
+    [?_assertEqual(ets:lookup_element(rollback_antievent, 49, 2), 1),
+     ?_assertEqual(ets:lookup_element(rollback_antievent, 1, 2), 1),
+     [?_assertEqual(ets:lookup_element(rollback_antievent, X, 2), 2) || X <- lists:seq(2, 48)],
+     [?_assertEqual(ets:lookup_element(rollback_antievent, X, 2), 2) || X <- lists:seq(50, 100)]].
+
+rollback_causal_antievents_recv(LVT, LVT) ->
     ?_assert(true);
 rollback_causal_antievents_recv(LVT, Max) ->
     receive
-        {event, LVT, _, false, _, _} ->
+        {event, ELVT, _, false, _, _} when ELVT == LVT + 1 ->
             rollback_causal_antievents_recv(LVT+1, Max);
 
         _Event ->

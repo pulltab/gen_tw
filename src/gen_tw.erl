@@ -184,7 +184,32 @@ loop(LVT, _Events=[#event{lvt=GVT, payload=?GVT_UPDATE_PAYLOAD}|T], PastEvents, 
     erlang:garbage_collect(),
     loop(LVT, T, NewPastEvents, Module, NewModStates);
 
-%% First event in queue occurs before LVT.  Rollback to handle the event.
+%% First event in queue is an antievent for an event in PastEvents.  In this
+%% case we roll back to a state occuring before the antievent, and resume
+%% processing.  Placing events in PastEvents back into Events ensures that
+%% the antievent and event will cancel each other out in the Events queue.
+loop(LVT, Events=[#event{lvt=ELVT, not_anti=false}|_], PastEvents, Module, ModStates)
+        when ELVT =< LVT ->
+
+    NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT >= ELVT end, ModStates),
+    [{LastKnownLVT, _}|_] = NewModStates,
+
+    {ReplayOrUndo, NewPastEvents} = rollback(LastKnownLVT, PastEvents),
+
+    {Replay, Undo} = lists:partition(fun(#event{link=Link}) -> Link == undefined end, ReplayOrUndo),
+
+    %%Send antievents for all events that occured within (ELVT, LVT] that have
+    %%a causal link.
+    [begin
+        Link = Event#event.link,
+        Link ! antievent(Event)
+     end || Event <- Undo],
+
+    NewEvents = ordsets:union(Replay, Events),
+    loop(LastKnownLVT, NewEvents, NewPastEvents, Module, NewModStates);
+
+%% First event in queue occurs before LVT.  Rollback to LVT of the event and
+%% handle the event.  We assume here that events are cumulative.
 %%
 %% Note:  This clause must applied before applying other rules such as
 %% antievent/event cancellation.
@@ -235,7 +260,7 @@ loop(_LVT, [Event = #event{lvt=ELVT}|T], PastEvents, Module, ModStates=[{LVT, Mo
 -spec rollback(virtual_time(), past_event_list(), event_list()) -> {event_list(), past_event_list()}.
 rollback(_LVT, [], NewEvents) ->
     {NewEvents, []};
-rollback(LVT, Events=[#event{lvt=ELVT}|_], NewEvents) when LVT > ELVT ->
+rollback(LVT, Events=[#event{lvt=ELVT}|_], NewEvents) when LVT >= ELVT ->
     {NewEvents, Events};
 rollback(LVT, [Event|T], NewEvents) ->
     rollback(LVT, T, [Event|NewEvents]).
@@ -309,8 +334,8 @@ rollback_test() ->
     ?assertMatch({Temp, []}, rollback(0, InOrder)),
 
     {ResultReplay, ResultPast} = rollback(50, InOrder),
-    ExpectedReplay = [E || E <- InOrder, E#event.lvt >= 50],
-    ExpectedPast = [E || E <- InOrder, E#event.lvt < 50],
+    ExpectedReplay = [E || E <- InOrder, E#event.lvt > 50],
+    ExpectedPast = [E || E <- InOrder, E#event.lvt =< 50],
 
     ReplayDiff = ResultReplay -- ExpectedReplay,
     PastDiff = ResultPast -- ExpectedPast,
