@@ -193,20 +193,7 @@ loop(LVT, Events=[#event{lvt=ELVT, not_anti=false}|_], PastEvents, Module, ModSt
 
     NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT >= ELVT end, ModStates),
     [{LastKnownLVT, _}|_] = NewModStates,
-
-    {ReplayOrUndo, NewPastEvents} = rollback(LastKnownLVT, PastEvents),
-
-    {Replay, Undo} = lists:partition(fun(#event{link=Link}) -> Link == undefined end, ReplayOrUndo),
-
-    %%Send antievents for all events that occured within (ELVT, LVT] that have
-    %%a causal link.
-    [begin
-        Link = Event#event.link,
-        Link ! antievent(Event)
-     end || Event <- Undo],
-
-    NewEvents = ordsets:union(Replay, Events),
-    loop(LastKnownLVT, NewEvents, NewPastEvents, Module, NewModStates);
+    rollback_loop(LastKnownLVT, Events, PastEvents, Module, ModStates);
 
 %% First event in queue occurs before LVT.  Rollback to LVT of the event and
 %% handle the event.  We assume here that events are cumulative.
@@ -214,20 +201,7 @@ loop(LVT, Events=[#event{lvt=ELVT, not_anti=false}|_], PastEvents, Module, ModSt
 %% Note:  This clause must applied before applying other rules such as
 %% antievent/event cancellation.
 loop(LVT, Events=[#event{lvt=ELVT}|_], PastEvents, Module, ModStates) when ELVT < LVT ->
-    {ReplayOrUndo, NewPastEvents} = rollback(ELVT, PastEvents),
-
-    {Replay, Undo} = lists:partition(fun(#event{link=Link}) -> Link == undefined end, ReplayOrUndo),
-
-    %%Send antievents for all events that occured within (ELVT, LVT] that have
-    %%a causal link.
-    [begin
-        Link = Event#event.link,
-        Link ! antievent(Event)
-     end || Event <- Undo],
-
-    NewEvents = ordsets:union(Replay, Events),
-    NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT > ELVT end, ModStates),
-    loop(ELVT, NewEvents, NewPastEvents, Module, NewModStates);
+    rollback_loop(ELVT, Events, PastEvents, Module, ModStates);
 
 %% Antievent and events meeting in Events cancel each other
 %% out.  Note:  We are relying on antievents appearing in the ordering first.
@@ -252,6 +226,24 @@ loop(_LVT, [Event = #event{lvt=ELVT}|T], PastEvents, Module, ModStates=[{LVT, Mo
             %% How can we more completely handle this?
             erlang:throw(Reason)
     end.
+
+-spec rollback_loop(virtual_time(), event_list(), past_event_list(), atom(), module_state_list()) -> no_return().
+rollback_loop(RollbackLVT, Events, PastEvents, Module, ModStates) ->
+    {ReplayOrUndo, NewPastEvents} = rollback(RollbackLVT, PastEvents),
+
+    {Replay, Undo} = lists:partition(fun(#event{link=Link}) -> Link == undefined end, ReplayOrUndo),
+
+    %%Send antievents for all events that occured within (ELVT, LVT] that have
+    %%a causal link.
+    [begin
+        Link = Event#event.link,
+        Link ! antievent(Event)
+     end || Event <- Undo],
+
+    NewEvents = ordsets:union(Replay, Events),
+    NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT > RollbackLVT end, ModStates),
+
+    loop(RollbackLVT, NewEvents, NewPastEvents, Module, NewModStates).
 
 %% Partition past events into two lists: events othat occurred before the given
 %% LVT, and events that occurred at or after the given LVT.
