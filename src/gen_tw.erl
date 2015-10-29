@@ -193,7 +193,7 @@ loop(LVT, Events=[#event{lvt=ELVT, not_anti=false}|_], PastEvents, Module, ModSt
 
     NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT >= ELVT end, ModStates),
     [{LastKnownLVT, _}|_] = NewModStates,
-    rollback_loop(LastKnownLVT, Events, PastEvents, Module, ModStates);
+    rollback_loop(LastKnownLVT, Events, PastEvents, Module, NewModStates);
 
 %% First event in queue occurs before LVT.  Rollback to LVT of the event and
 %% handle the event.  We assume here that events are cumulative.
