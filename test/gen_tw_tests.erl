@@ -99,7 +99,6 @@ handle_info_error(Pid) ->
             ?_assert(false)
     end.
 
-
 %% In the absence of events, time is advanced monotonically.
 tick_tock(_Pid) ->
     F =
