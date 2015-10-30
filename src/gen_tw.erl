@@ -190,7 +190,6 @@ loop(LVT, _Events=[#event{lvt=GVT, payload=?GVT_UPDATE_PAYLOAD}|T], PastEvents, 
 %% the antievent and event will cancel each other out in the Events queue.
 loop(LVT, Events=[#event{lvt=ELVT, not_anti=false}|_], PastEvents, Module, ModStates)
         when ELVT =< LVT ->
-
     NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT >= ELVT end, ModStates),
     [{LastKnownLVT, _}|_] = NewModStates,
     rollback_loop(LastKnownLVT, Events, PastEvents, Module, NewModStates);
