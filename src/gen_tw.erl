@@ -136,8 +136,14 @@ drain_msgq(Module, Events, TMO) ->
             drain_msgq(Module, [EventOrAntievent | Events], 0);
 
         Msg ->
-            Module:handle_info(Msg),
-            drain_msgq(Module, Events, TMO)
+            case Module:handle_info(Msg) of
+                ok ->
+                    drain_msgq(Module, Events, 0);
+
+                {error, Reason} ->
+                    %%Discard any events and inject the stop event
+                    [event(undefined, ?STOP_PAYLOAD(Reason))]
+            end
 
     after TMO ->
         ordsets:from_list(Events)
