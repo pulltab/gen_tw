@@ -24,6 +24,7 @@
 -callback handle_event(CurrentLVT::virtual_time(), EventLVT::virtual_time(), Event::term(), ModuleState::term()) ->
     {ok, NextState::term()} |
     {error, Reason::term()}.
+-callback handle_info(Term::term()) -> ok | {error, Reason::term()}.
 -callback terminate(State::term()) -> any().
 
 -record(event,
@@ -125,25 +126,32 @@ init(Parent, InitialLVT, Module, Arg) ->
             exit(Error)
     end.
 
--spec drain_msgq(Events::event_list(), TMO::integer()) -> event_list().
-drain_msgq(Events, TMO) ->
+-spec drain_msgq(Module::atom(), Events::event_list(), TMO::integer()) -> event_list().
+drain_msgq(Module, Events, TMO) ->
     receive
         NewEvents when is_list(NewEvents) ->
-            drain_msgq(NewEvents ++ Events, 0);
+            drain_msgq(Module, NewEvents ++ Events, 0);
 
         EventOrAntievent when is_record(EventOrAntievent, event) ->
-            drain_msgq([EventOrAntievent | Events], 0);
+            drain_msgq(Module, [EventOrAntievent | Events], 0);
 
         Msg ->
-            error_logger:warning_msg("~p discarding msg: ~p~n", [?MODULE, Msg])
+            case Module:handle_info(Msg) of
+                ok ->
+                    drain_msgq(Module, Events, 0);
+
+                {error, Reason} ->
+                    %%Discard any events and inject the stop event
+                    [event(undefined, ?STOP_PAYLOAD(Reason))]
+            end
 
     after TMO ->
         ordsets:from_list(Events)
     end.
 
--spec drain_msgq(TMO::integer()) -> event_list().
-drain_msgq(InitialTMO) ->
-    drain_msgq([], InitialTMO).
+-spec drain_msgq(Module::atom(), TMO::integer()) -> event_list().
+drain_msgq(Module, InitialTMO) ->
+    drain_msgq(Module, [], InitialTMO).
 
 -spec append_state(virtual_time(), term(), module_state_list()) -> module_state_list().
 append_state(LVT, State, []) ->
@@ -160,7 +168,7 @@ tick_tock(LVT, Module, ModuleState) ->
 -spec loop(virtual_time(), event_list(), past_event_list(), atom(), module_state_list()) -> no_return().
 %% No events to process, advance our local virtual time.
 loop(LVT, _Events = [], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
-    case drain_msgq(0) of
+    case drain_msgq(Module, 0) of
         [] ->
             {NewLVT, NewModState} = tick_tock(LVT, Module, ModState),
             loop(NewLVT, [], PastEvents, Module, append_state(NewLVT, NewModState, ModStates));

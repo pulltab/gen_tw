@@ -42,6 +42,8 @@ tw_events_test_() ->
             ok
         end,
         [
+            fun handle_info/1,
+            fun handle_info_error/1,
             fun tick_tock/1,
             fun in_order_event_processing/1,
             fun in_queue_antievent_cancels_event/1,
@@ -60,6 +62,43 @@ tw_events_test_() ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% Event Handling
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%% Terms which are not events pass through via handle_info
+handle_info(Pid) ->
+    ets:new(test, [named_table, public]),
+
+    F =
+        fun(foobar) ->
+            ets:insert(test, {called, true}),
+            ok
+        end,
+   meck:expect(test_actor, handle_info, F),
+
+   Pid ! foobar,
+   timer:sleep(100),
+
+   [{called, true}] = ets:lookup(test, called),
+   ?_assert(true).
+
+%% handle_info returning error tuple halts gen_tw process
+handle_info_error(Pid) ->
+    process_flag(trap_exit, true),
+
+    F = fun(Reason) -> {error, Reason} end,
+    meck:expect(test_actor, handle_info, F),
+
+    Pid ! foobar,
+
+    timer:sleep(100), %% Wait for the exit message to trigger
+    process_flag(trap_exit, false),  %%Disable trap_exit for future tests
+
+    receive
+        {'EXIT', Pid, foobar} ->
+            ?_assert(true)
+    after
+        100 ->
+            ?_assert(false)
+    end.
 
 %% In the absence of events, time is advanced monotonically.
 tick_tock(_Pid) ->
