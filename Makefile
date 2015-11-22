@@ -35,7 +35,7 @@ check: eunit
 
 .PHONY: eunit
 eunit:  rebar.config
-	$(REBAR) eunit $(APPS_OPT) $(SUITES:%=suites=%) $(TESTS:%=tests=%)
+	$(REBAR) eunit -v --dir="src,test"
 
 .PHONY: deps
 deps:
