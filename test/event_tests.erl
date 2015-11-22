@@ -1,4 +1,4 @@
--module(gen_tw_tests).
+-module(event_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 

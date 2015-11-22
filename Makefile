@@ -35,7 +35,7 @@ check: eunit
 
 .PHONY: eunit
 eunit:  rebar.config
-	$(REBAR) eunit --dir="src,test"
+	$(REBAR) eunit -v --dir="src,test"
 
 .PHONY: deps
 deps:
