@@ -124,7 +124,7 @@ init(Parent, GVT, LVTUB, Module, Arg) ->
     case erlang:apply(Module, init, [Arg]) of
         {ok, ModuleState} ->
             proc_lib:init_ack(Parent, {ok, self()}),
-            loop(GVT, [], [], lvt_ub(GVT, LVTUB), Module, [{GVT, ModuleState}]);
+            loop(GVT, lvt_ub(GVT, LVTUB), [], [], Module, [{GVT, ModuleState}]);
 
         Error ->
             exit(Error)
@@ -178,21 +178,21 @@ tick_tock(LVT, Module, ModuleState) ->
 %% Current LVT value is at or beyond LVT upperbound.  Nothing to do but wait for
 %% events.  Note:  GVT Updates are events, as such, we will only be blocked here
 %% for as long as we do not receive such an event.
-loop(LVT, [], PastEvents, LVTUB, Module, ModState) when LVT >= LVTUB ->
+loop(LVT, LVTUB, [], PastEvents, Module, ModState) when LVT >= LVTUB ->
     Events = drain_msgq(Module, infinity),
-    loop(LVT, Events, PastEvents, LVTUB, Module, ModState);
+    loop(LVT, LVTUB, Events, PastEvents, Module, ModState);
 
 %% No events to process, we are behind lvt upperbound so advance our local virtual time.
-loop(LVT, _Events = [], PastEvents, LVTUB, Module, ModStates=[{LVT, ModState}|_]) ->
+loop(LVT, LVTUB, _Events = [], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
     case drain_msgq(Module, 0) of
         [] ->
             {NewLVT, NewModState} = tick_tock(LVT, Module, ModState),
-            loop(NewLVT, [], PastEvents, LVTUB, Module, append_state(NewLVT, NewModState, ModStates));
+            loop(NewLVT, LVTUB, [], PastEvents, Module, append_state(NewLVT, NewModState, ModStates));
         Events ->
-            loop(LVT, Events, PastEvents, LVTUB, Module, ModStates)
+            loop(LVT, LVTUB, Events, PastEvents, Module, ModStates)
     end;
 
-loop(_LVT, _Events = [#event{payload=?STOP_PAYLOAD(Reason)}|_], _PastEvents, _LVTUB, Module, [{_, ModState}|_]) ->
+loop(_LVT, _LVTUB, _Events = [#event{payload=?STOP_PAYLOAD(Reason)}|_], _PastEvents, Module, [{_, ModState}|_]) ->
     Module:terminate(ModState),
     exit(Reason);
 
@@ -202,49 +202,49 @@ loop(_LVT, _Events = [#event{payload=?STOP_PAYLOAD(Reason)}|_], _PastEvents, _LV
 %%
 %% NOTE:  We make no attempt to calculate GVT amongst gen_tw actors.  This is
 %% the responsibility of a system higher up the application stack.
-loop(LVT, _Events=[#event{lvt=GVT, payload=?GVT_UPDATE_PAYLOAD}|T], PastEvents, LVTUB, Module, ModStates) when LVT >= GVT ->
+loop(LVT, LVTUB, _Events=[#event{lvt=GVT, payload=?GVT_UPDATE_PAYLOAD}|T], PastEvents, Module, ModStates) when LVT >= GVT ->
     NewLVTUB = lvt_ub(GVT, LVTUB),
     NewModStates = [{ModLVT, ModState} || {ModLVT, ModState} <- ModStates, ModLVT >= GVT],
     NewPastEvents = [E || E<-PastEvents, E#event.lvt >= GVT],
     erlang:garbage_collect(),
 
-    loop(LVT, T, NewPastEvents, NewLVTUB, Module, NewModStates);
+    loop(LVT, NewLVTUB, T, NewPastEvents, Module, NewModStates);
 
 %% First event in queue is an antievent for an event in PastEvents.  In this
 %% case we roll back to a state occuring before the antievent, and resume
 %% processing.  Placing events in PastEvents back into Events ensures that
 %% the antievent and event will cancel each other out in the Events queue.
-loop(LVT, Events=[#event{lvt=ELVT, not_anti=false}|_], PastEvents, LVTUB, Module, ModStates)
+loop(LVT, LVTUB, Events=[#event{lvt=ELVT, not_anti=false}|_], PastEvents, Module, ModStates)
         when ELVT =< LVT ->
     NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT >= ELVT end, ModStates),
     [{LastKnownLVT, _}|_] = NewModStates,
-    rollback_loop(LastKnownLVT, Events, PastEvents, LVTUB, Module, NewModStates);
+    rollback_loop(LastKnownLVT, LVTUB, Events, PastEvents, Module, NewModStates);
 
 %% First event in queue occurs before LVT.  Rollback to LVT of the event and
 %% handle the event.  We assume here that events are cumulative.
 %%
 %% Note:  This clause must applied before applying other rules such as
 %% antievent/event cancellation.
-loop(LVT, Events=[#event{lvt=ELVT}|_], PastEvents, LVTUB, Module, ModStates) when ELVT < LVT ->
-    rollback_loop(ELVT, Events, PastEvents, LVTUB, Module, ModStates);
+loop(LVT, LVTUB, Events=[#event{lvt=ELVT}|_], PastEvents, Module, ModStates) when ELVT < LVT ->
+    rollback_loop(ELVT, LVTUB, Events, PastEvents, Module, ModStates);
 
 %% Antievent and events meeting in Events cancel each other
 %% out.  Note:  We are relying on antievents appearing in the ordering first.
 %% This prevents us from having to search PastEvents for the corresponding
 %% event, in this case.
-loop(LVT, [#event{id=EID, not_anti=false}|T], PastEvents, LVTUB, Module, ModStates) ->
+loop(LVT, LVTUB, [#event{id=EID, not_anti=false}|T], PastEvents, Module, ModStates) ->
     NewEvents = [E || E <- T, E#event.id /= EID],
-    loop(LVT, NewEvents, PastEvents, LVTUB, Module, ModStates);
+    loop(LVT, LVTUB, NewEvents, PastEvents, Module, ModStates);
 
 %% Event at or after the current value of LVT.  Process the event by invoking
 %% Module:handle_event and looping on the new state provided.
 %%
 %% TODO:  We are currently halting on error here.  This is likely not what we
 %% want to do.
-loop(_LVT, [Event = #event{lvt=ELVT}|T], PastEvents, LVTUB, Module, ModStates=[{LVT, ModState}|_]) ->
+loop(_LVT, LVTUB, [Event = #event{lvt=ELVT}|T], PastEvents, Module, ModStates=[{LVT, ModState}|_]) ->
     case handle_event(LVT, Event, Module, ModState) of
         {ok, NewModState} ->
-            loop(ELVT, T, [Event|PastEvents], LVTUB, Module, append_state(ELVT, NewModState, ModStates));
+            loop(ELVT, LVTUB, T, [Event|PastEvents], Module, append_state(ELVT, NewModState, ModStates));
 
         {error, Reason} ->
             %% TODO:  This can result in deadlock
@@ -253,7 +253,7 @@ loop(_LVT, [Event = #event{lvt=ELVT}|T], PastEvents, LVTUB, Module, ModStates=[{
     end.
 
 -spec rollback_loop(virtual_time(), event_list(), past_event_list(), virtual_time(), atom(), module_state_list()) -> no_return().
-rollback_loop(RollbackLVT, Events, PastEvents, LVTUB, Module, ModStates) ->
+rollback_loop(RollbackLVT, LVTUB, Events, PastEvents, Module, ModStates) ->
     {ReplayOrUndo, NewPastEvents} = rollback(RollbackLVT, PastEvents),
 
     {Replay, Undo} = lists:partition(fun(#event{link=Link}) -> Link == undefined end, ReplayOrUndo),
@@ -268,7 +268,7 @@ rollback_loop(RollbackLVT, Events, PastEvents, LVTUB, Module, ModStates) ->
     NewEvents = ordsets:union(Replay, Events),
     NewModStates = lists:dropwhile(fun({SLVT, _}) -> SLVT > RollbackLVT end, ModStates),
 
-    loop(RollbackLVT, NewEvents, NewPastEvents, LVTUB, Module, NewModStates).
+    loop(RollbackLVT, LVTUB, NewEvents, NewPastEvents, Module, NewModStates).
 
 %% Partition past events into two lists: events othat occurred before the given
 %% LVT, and events that occurred at or after the given LVT.
