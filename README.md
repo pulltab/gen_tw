@@ -8,7 +8,7 @@
 
 ## Features:
 * OTP friendly
-* Handles state rollback, and event causality between agents (events/antivents) automatically
+* Handles state rollback and event causality between agents (events/antivents) automatically
 * LVT upper bound allows a user to fix simulation within a certain distance from GVT
 
 ## Building
@@ -22,6 +22,3 @@ make
 ```
 make check
 ```
-
-
-
