@@ -1,4 +1,4 @@
--module(gen_tw_tests).
+-module(event_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -24,23 +24,8 @@ start_stop_test() ->
 
 tw_events_test_() ->
     {foreach,
-        fun() ->
-            ok = meck:new(test_actor, [passthrough]),
-            {ok, Pid} = gen_tw:spawn_link(test_actor, []),
-            receive
-                {ack, _, {ok, _}} ->
-                    Pid
-            after 100 ->
-                throw({failed_to_init_test_actor})
-            end
-         end,
-        fun(Pid) ->
-            erlang:unlink(Pid),
-            gen_tw:stop(Pid),
-            timer:sleep(1000),
-            meck:unload(test_actor),
-            ok
-        end,
+        fun test_util:setup/0,
+        fun test_util:cleanup/1,
         [
             fun handle_info/1,
             fun handle_info_error/1,
