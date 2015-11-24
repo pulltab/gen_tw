@@ -11,12 +11,7 @@ setup() ->
 setup(LVTUB) ->
     ok = meck:new(test_actor, [passthrough]),
     {ok, Pid} = gen_tw:start_link(LVTUB, test_actor, []),
-    receive
-        {ack, _, {ok, _}} ->
-            Pid
-    after 100 ->
-        throw({failed_to_init_test_actor})
-    end.
+    Pid.
 
 cleanup(Pid) ->
     erlang:unlink(Pid),

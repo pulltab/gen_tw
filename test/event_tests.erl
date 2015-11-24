@@ -3,18 +3,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 start_stop_test() ->
-    Res = gen_tw:spawn(test_actor, []),
+    Res = gen_tw:start(test_actor, []),
     ?assertMatch({ok, _}, Res),
     {ok, Pid} = Res,
     ?assert(is_pid(Pid)),
-
-    %% Ensure proc_lib init acks are being sent out.
-    receive
-        {ack, Pid, {ok, Pid}} ->
-            ok
-    after 100 ->
-        ?assert(false)
-    end,
 
     gen_tw:stop(Pid),
 

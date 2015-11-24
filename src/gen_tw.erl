@@ -1,8 +1,8 @@
 -module(gen_tw).
 
 %% API
--export([spawn/2,
-         spawn_link/2,
+-export([start/2,
+         start_link/2,
          start_link/3,
          stop/1,
          stop/2,
@@ -62,18 +62,16 @@
 %%% API
 %%%===================================================================
 
--spec spawn(atom(), term()) -> {ok, ref()}.
-spawn(Module, Arg) ->
-    Pid = proc_lib:spawn(?MODULE, init, [self(), 0, infinity, Module, Arg]),
-    {ok, Pid}.
+-spec start(atom(), term()) -> {ok, ref()}.
+start(Module, Arg) ->
+    proc_lib:start(?MODULE, init, [self(), 0, infinity, Module, Arg]).
 
--spec spawn_link(atom(), term()) -> {ok, ref()}.
-spawn_link(Module, Arg) ->
+-spec start_link(atom(), term()) -> {ok, ref()}.
+start_link(Module, Arg) ->
     start_link(infinity, Module, Arg).
 
 start_link(LVTUB, Module, Arg) ->
-    Pid = proc_lib:spawn_link(?MODULE, init, [self(), 0, LVTUB, Module, Arg]),
-    {ok, Pid}.
+    proc_lib:start_link(?MODULE, init, [self(), 0, LVTUB, Module, Arg]).
 
 -spec stop(ref()) -> ok.
 stop(Pid) ->
