@@ -64,14 +64,15 @@
 
 -spec start(atom(), term()) -> {ok, ref()}.
 start(Module, Arg) ->
-    proc_lib:start(?MODULE, init, [self(), 0, infinity, Module, Arg]).
+    proc_lib:start(?MODULE, init, [self(), 0, Module, Arg, infinity]).
 
 -spec start_link(atom(), term()) -> {ok, ref()}.
-start_link(Module, Arg) ->
-    start_link(infinity, Module, Arg).
+start_link(Module, Args) ->
+    start_link(Module, Args, infinity).
 
-start_link(LVTUB, Module, Arg) ->
-    proc_lib:start_link(?MODULE, init, [self(), 0, LVTUB, Module, Arg]).
+-spec start_link(atom(), term(), virtual_time() | infinity) -> {ok, ref()}.
+start_link(Module, Args, LVTUB) ->
+    proc_lib:start_link(?MODULE, init, [self(), 0, Module, Args, LVTUB]).
 
 -spec stop(ref()) -> ok.
 stop(Pid) ->
@@ -118,7 +119,7 @@ notify(Ref, Event) when is_record(Event, event) ->
 %%%===================================================================
 
 -spec init(pid(), virtual_time(), virtual_time() | infinity, atom(), term()) -> no_return().
-init(Parent, GVT, LVTUB, Module, Arg) ->
+init(Parent, GVT, Module, Arg, LVTUB) ->
     case erlang:apply(Module, init, [Arg]) of
         {ok, ModuleState} ->
             proc_lib:init_ack(Parent, {ok, self()}),
