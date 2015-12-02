@@ -39,6 +39,19 @@ stop_test() ->
     ?assertMatch(undefined, whereis(foobar)),
     meck:unload(test_actor).
 
+throw_test() ->
+    meck:expect(test_actor, init, fun(_) -> throw(deadbeef) end),
+    ?assertMatch({error, deadbeef}, gen_tw:start({local, foobar}, test_actor, [])),
+    ?assertMatch(undefined, whereis(foobar)),
+    meck:unload(test_actor).
+
+already_registered_test() ->
+    {ok, P1} = gen_tw:start({local, foobar}, test_actor, []),
+    P2Res = gen_tw:start({local, foobar}, test_actor, []),
+    exit(P1, kill),
+    ?assertMatch(P1, whereis(foobar)),
+    ?assertMatch({error, already_registered}, P2Res).
+
 tw_events_test_() ->
     {foreach,
         fun test_util:setup/0,

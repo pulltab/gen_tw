@@ -151,14 +151,12 @@ do_spawn(Link, Name, Module, ModuleArgs, GenTWArgs) ->
 do_register(undefined) ->
     ok;
 do_register({local, LocalName}) ->
-    try register(LocalName, self()) of
+    try erlang:register(LocalName, self()) of
         true ->
-            ok;
-        false ->
-            {error, already_registered}
+            ok
     catch
-        error:Reason ->
-            {error, Reason}
+        error:_ ->
+            {error, already_registered}
     end;
 do_register({global, GlobalName}) ->
     case global:register_name(GlobalName, self()) of
@@ -172,7 +170,7 @@ do_register({global, GlobalName}) ->
 do_unregister(undefined) ->
     ok;
 do_unregister({local, LocalName}) ->
-    (catch unregister(LocalName));
+    (catch erlang:unregister(LocalName));
 do_unregister({global, GlobalName}) ->
     global:unregister_name(GlobalName).
 
@@ -197,6 +195,7 @@ do_init(Parent, Name, Module, Arg, GenTWArgs) ->
     catch
         _:Reason ->
             do_unregister(Name),
+            proc_lib:init_ack(Parent, {error, Reason}),
             exit(Reason)
     end.
 
@@ -207,7 +206,7 @@ init(Parent, Name, Module, Arg, GenTWArgs) ->
             do_init(Parent, Name, Module, Arg, GenTWArgs);
 
         Error = {error, Reason} ->
-            proc_live:init_ack(Parent, Error),
+            proc_lib:init_ack(Parent, Error),
             exit(Reason)
     end.
 
