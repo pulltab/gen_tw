@@ -194,7 +194,6 @@ do_init(Parent, Name, Module, Arg, GenTWArgs) ->
             do_unregister(Name),
             proc_lib:init_ack(Parent, {error, StopReason}),
             exit(StopReason)
-
     catch
         _:Reason ->
             do_unregister(Name),
