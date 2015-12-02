@@ -151,11 +151,14 @@ do_spawn(Link, Name, Module, ModuleArgs, GenTWArgs) ->
 do_register(undefined) ->
     ok;
 do_register({local, LocalName}) ->
-    case register(LocalName, self()) of
+    try register(LocalName, self()) of
         true ->
             ok;
         false ->
             {error, already_registered}
+    catch
+        error:Reason ->
+            {error, Reason}
     end;
 do_register({global, GlobalName}) ->
     case global:register_name(GlobalName, self()) of
@@ -169,7 +172,7 @@ do_register({global, GlobalName}) ->
 do_unregister(undefined) ->
     ok;
 do_unregister({local, LocalName}) ->
-    unregister(LocalName);
+    (catch unregister(LocalName));
 do_unregister({global, GlobalName}) ->
     global:unregister_name(GlobalName).
 
