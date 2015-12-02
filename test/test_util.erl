@@ -10,7 +10,7 @@ setup() ->
 
 setup(LVTUB) ->
     ok = meck:new(test_actor, [passthrough]),
-    {ok, Pid} = gen_tw:start_link(test_actor, [], LVTUB),
+    {ok, Pid} = gen_tw:start_link(test_actor, [], #{lvtub=>LVTUB}),
     Pid.
 
 cleanup(Pid) ->
