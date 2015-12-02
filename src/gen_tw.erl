@@ -2,8 +2,11 @@
 
 %% API
 -export([start/2,
+         start/3,
+         start/4,
          start_link/2,
          start_link/3,
+         start_link/4,
          stop/1,
          stop/2,
          gvt/2,
@@ -19,8 +22,10 @@
 
 -export([init/5]).
 
--callback init(Arg::term()) -> {ok, InitialState::term()} | {error, Reason::term()}.
-
+-callback init(Arg::term()) ->
+    {ok, InitialState::term()} |
+    {stop, Reason::term()} |
+    ignore.
 -callback tick_tock(CurrentLVT::virtual_time(), State::term()) -> {NextLVT::virtual_time(), NextState::term()}.
 -callback handle_event(CurrentLVT::virtual_time(), EventLVT::virtual_time(), Event::term(), ModuleState::term()) ->
     {ok, NextState::term()} |
@@ -62,17 +67,30 @@
 %%% API
 %%%===================================================================
 
+-type name() :: undefined | {local, atom()} | {global, atom()}.
 -spec start(atom(), term()) -> {ok, ref()}.
 start(Module, Arg) ->
-    proc_lib:start(?MODULE, init, [self(), 0, Module, Arg, infinity]).
+    start(undefined, Module, Arg).
+
+-spec start(name(), atom(), term()) -> {ok, ref()}.
+start(Name, Module, Arg) ->
+    start(Name, Module, Arg, #{}).
+
+-spec start(name(), atom(), term(), map()) -> {ok, ref()}.
+start(Name, Module, ModuleArgs, GenTWArgs) ->
+    do_spawn(nolink, Name, Module, ModuleArgs, GenTWArgs).
 
 -spec start_link(atom(), term()) -> {ok, ref()}.
 start_link(Module, Args) ->
-    start_link(Module, Args, infinity).
+    start_link(Module, Args, #{}).
 
--spec start_link(atom(), term(), virtual_time() | infinity) -> {ok, ref()}.
-start_link(Module, Args, LVTUB) ->
-    proc_lib:start_link(?MODULE, init, [self(), 0, Module, Args, LVTUB]).
+-spec start_link(atom(), term(), map()) -> {ok, ref()}.
+start_link(Module, Args, GenTWArgs) ->
+    start_link(undefined, Module, Args, GenTWArgs).
+
+-spec start_link(name(), atom(), term(), map()) -> {ok, ref()}.
+start_link(Name, Module, Args, GenTWArgs) ->
+    do_spawn(link, Name, Module, Args, GenTWArgs).
 
 -spec stop(ref()) -> ok.
 stop(Pid) ->
@@ -118,15 +136,78 @@ notify(Ref, Event) when is_record(Event, event) ->
 %%% Internals
 %%%===================================================================
 
--spec init(pid(), virtual_time(), virtual_time() | infinity, atom(), term()) -> no_return().
-init(Parent, GVT, Module, Arg, LVTUB) ->
-    case erlang:apply(Module, init, [Arg]) of
+-spec do_spawn(link | nolink, name(), atom(), [term()], map()) -> {ok, pid()} | {error, term()}.
+do_spawn(Link, Name, Module, ModuleArgs, GenTWArgs) ->
+    SpawnFun =
+        case Link of
+            nolink ->
+                fun proc_lib:start/3;
+            link ->
+                fun proc_lib:start_link/3
+        end,
+    SpawnFun(?MODULE, init, [self(), Name, Module, ModuleArgs, GenTWArgs]).
+
+-spec do_register(name()) -> ok | {error, term()}.
+do_register(undefined) ->
+    ok;
+do_register({local, LocalName}) ->
+    try erlang:register(LocalName, self()) of
+        true ->
+            ok
+    catch
+        error:_ ->
+            {error, already_registered}
+    end;
+do_register({global, GlobalName}) ->
+    case global:register_name(GlobalName, self()) of
+        yes ->
+            ok;
+        no ->
+            {error, already_registered}
+    end.
+
+-spec do_unregister(name()) -> ok | {error, term()}.
+do_unregister(undefined) ->
+    ok;
+do_unregister({local, LocalName}) ->
+    (catch erlang:unregister(LocalName));
+do_unregister({global, GlobalName}) ->
+    global:unregister_name(GlobalName).
+
+do_init(Parent, Name, Module, Arg, GenTWArgs) ->
+    GVT = maps:get(gvt, GenTWArgs, 0),
+    LVTUB = maps:get(lvtub, GenTWArgs, infinity),
+
+    try Module:init(Arg) of
         {ok, ModuleState} ->
             proc_lib:init_ack(Parent, {ok, self()}),
             loop(GVT, lvt_ub(GVT, LVTUB), [], [], Module, [{GVT, ModuleState}]);
 
-        Error ->
-            exit(Error)
+        ignore ->
+            do_unregister(Name),
+            proc_lib:init_ack(Parent, ignore),
+            exit(normal);
+
+        {stop, StopReason} ->
+            do_unregister(Name),
+            proc_lib:init_ack(Parent, {error, StopReason}),
+            exit(StopReason)
+    catch
+        _:Reason ->
+            do_unregister(Name),
+            proc_lib:init_ack(Parent, {error, Reason}),
+            exit(Reason)
+    end.
+
+-spec init(pid(), name(), atom(), term(), map()) -> no_return().
+init(Parent, Name, Module, Arg, GenTWArgs) ->
+    case do_register(Name) of
+        ok ->
+            do_init(Parent, Name, Module, Arg, GenTWArgs);
+
+        Error = {error, Reason} ->
+            proc_lib:init_ack(Parent, Error),
+            exit(Reason)
     end.
 
 -spec lvt_ub(virtual_time(), virtual_time() | infinity) -> virtual_time() | infinity.

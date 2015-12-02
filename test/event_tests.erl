@@ -14,6 +14,44 @@ start_stop_test() ->
 
     ?assertMatch(undefined, erlang:process_info(Pid)).
 
+local_register_test() ->
+    {ok, Pid} = gen_tw:start({local, foo}, test_actor, []),
+    Where = whereis(foo),
+    ?assertMatch(Pid, Where),
+    erlang:unregister(foo),
+    exit(Pid, kill),
+
+    {ok, Pid2} = gen_tw:start_link({local, foo}, test_actor, [], #{}),
+    ?assertMatch(Pid2, whereis(foo)),
+    erlang:unlink(Pid2),
+    erlang:unregister(foo),
+    exit(Pid2, kill).
+
+ignore_test() ->
+    meck:expect(test_actor, init, fun(_) -> ignore end),
+    ?assertMatch(ignore, gen_tw:start({local, foobar}, test_actor, [])),
+    ?assertMatch(undefined, whereis(foobar)),
+    meck:unload(test_actor).
+
+stop_test() ->
+    meck:expect(test_actor, init, fun(_) -> {stop, deadbeef} end),
+    ?assertMatch({error, deadbeef}, gen_tw:start({local, foobar}, test_actor, [])),
+    ?assertMatch(undefined, whereis(foobar)),
+    meck:unload(test_actor).
+
+throw_test() ->
+    meck:expect(test_actor, init, fun(_) -> throw(deadbeef) end),
+    ?assertMatch({error, deadbeef}, gen_tw:start({local, foobar}, test_actor, [])),
+    ?assertMatch(undefined, whereis(foobar)),
+    meck:unload(test_actor).
+
+already_registered_test() ->
+    {ok, P1} = gen_tw:start({local, foobar}, test_actor, []),
+    P2Res = gen_tw:start({local, foobar}, test_actor, []),
+    exit(P1, kill),
+    ?assertMatch(P1, whereis(foobar)),
+    ?assertMatch({error, already_registered}, P2Res).
+
 tw_events_test_() ->
     {foreach,
         fun test_util:setup/0,
