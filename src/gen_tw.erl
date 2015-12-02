@@ -180,17 +180,7 @@ do_init(Parent, Name, Module, Arg, GenTWArgs) ->
     GVT = maps:get(gvt, GenTWArgs, 0),
     LVTUB = maps:get(lvtub, GenTWArgs, infinity),
 
-    InitRes =
-        try
-            Module:init(Arg)
-        catch
-
-            _:Reason ->
-                do_unregister(Name),
-                exit(Reason)
-        end,
-
-    case InitRes of
+    try Module:init(Arg) of
         {ok, ModuleState} ->
             proc_lib:init_ack(Parent, {ok, self()}),
             loop(GVT, lvt_ub(GVT, LVTUB), [], [], Module, [{GVT, ModuleState}]);
@@ -204,6 +194,11 @@ do_init(Parent, Name, Module, Arg, GenTWArgs) ->
             do_unregister(Name),
             proc_lib:init_ack(Parent, {error, StopReason}),
             exit(StopReason)
+
+    catch
+        _:Reason ->
+            do_unregister(Name),
+            exit(Reason)
     end.
 
 -spec init(pid(), name(), atom(), term(), map()) -> no_return().
