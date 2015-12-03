@@ -7,6 +7,9 @@
          start_link/2,
          start_link/3,
          start_link/4,
+         pause/1,
+         pause_for/2,
+         resume/1,
          stop/1,
          stop/2,
          gvt/2,
@@ -33,10 +36,16 @@
 -callback handle_info(Term::term()) -> ok | {error, Reason::term()}.
 -callback terminate(State::term()) -> any().
 
+-record('$gen_tw',
+    {
+     payload :: term()
+    }).
+
 -record(event,
-    {lvt      :: virtual_time(),    %% Simulation time the event is to be applied
+    {
+     lvt      :: virtual_time(),    %% Simulation time the event is to be applied
      id       :: uuid:uuid(),       %% Unique identifier for the event
-     not_anti :: boolean(),         %% true for event, false for antievent
+     not_anti :: boolean(),         %% true for an event, false for antievent
      link     :: ref() | undefined, %% Causal link for the event (Pid)
      payload  :: term()             %% Event payload
     }).
@@ -60,7 +69,10 @@
 -opaque event() :: #event{}.
 -type virtual_time() :: integer().
 
--define(STOP_PAYLOAD(Reason), {'$stop', Reason}).
+-define(PAUSE_PAYLOAD, 'pause').
+-define(PAUSE_FOR_PAYLOAD(Duration), {'pause_for', Duration}).
+-define(RESUME_PAYLOAD, 'resume').
+-define(STOP_PAYLOAD(Reason), {'stop', Reason}).
 -define(GVT_UPDATE_PAYLOAD, '$gvt').
 
 %%%===================================================================
@@ -98,11 +110,23 @@ stop(Pid) ->
 
 -spec stop(ref(), term()) -> ok.
 stop(Pid, Reason) ->
-    notify(Pid, event(undefined, ?STOP_PAYLOAD(Reason))).
+    Pid ! system_event(?STOP_PAYLOAD(Reason)).
 
 -spec gvt(ref(), integer()) -> ok.
 gvt(Pid, GVT) when is_integer(GVT) andalso GVT >= 0 ->
-    notify(Pid, event(GVT, ?GVT_UPDATE_PAYLOAD)).
+    Pid ! system_event({?GVT_UPDATE_PAYLOAD, GVT}).
+
+-spec pause(ref()) -> ok.
+pause(Ref) ->
+    Ref ! system_event(?PAUSE_PAYLOAD).
+
+-spec pause_for(ref(), integer()) -> ok.
+pause_for(Ref, DurationMS) when is_integer(DurationMS) andalso DurationMS > 0 ->
+    Ref ! system_event(?PAUSE_FOR_PAYLOAD(DurationMS)).
+
+-spec resume(ref()) -> ok.
+resume(Ref) ->
+    Ref ! system_event(?RESUME_PAYLOAD).
 
 -spec antievent(Event::event()) -> event().
 antievent(Event=#event{}) ->
@@ -135,6 +159,9 @@ notify(Ref, Event) when is_record(Event, event) ->
 %%%===================================================================
 %%% Internals
 %%%===================================================================
+
+system_event(Payload) ->
+    #'$gen_tw'{payload=Payload}.
 
 -spec do_spawn(link | nolink, name(), atom(), [term()], map()) -> {ok, pid()} | {error, term()}.
 do_spawn(Link, Name, Module, ModuleArgs, GenTWArgs) ->
@@ -225,6 +252,9 @@ drain_msgq(Module, Events, TMO) ->
         EventOrAntievent when is_record(EventOrAntievent, event) ->
             drain_msgq(Module, [EventOrAntievent | Events], 0);
 
+        SystemEvent when is_record(SystemEvent, '$gen_tw') ->
+            drain_msgq(Module, [SystemEvent | Events], 0);
+
         Msg ->
             case Module:handle_info(Msg) of
                 ok ->
@@ -232,7 +262,7 @@ drain_msgq(Module, Events, TMO) ->
 
                 {error, Reason} ->
                     %%Discard any events and inject the stop event
-                    [event(undefined, ?STOP_PAYLOAD(Reason))]
+                    [system_event(?STOP_PAYLOAD(Reason))]
             end
 
     after TMO ->
@@ -272,7 +302,21 @@ loop(LVT, LVTUB, _Events = [], PastEvents, Module, ModStates=[{LVT, ModState}|_]
             loop(LVT, LVTUB, Events, PastEvents, Module, ModStates)
     end;
 
-loop(_LVT, _LVTUB, _Events = [#event{payload=?STOP_PAYLOAD(Reason)}|_], _PastEvents, Module, [{_, ModState}|_]) ->
+%% Pause command.  Halt the advancement of the simulation and await resume.
+loop(LVT, LVTUB, _Events = [{'$gen_tw', ?PAUSE_PAYLOAD}|T], PastEvents, Module, ModuleStates) ->
+    pause_loop(LVT, LVTUB, T, PastEvents, Module, ModuleStates);
+
+%% Pause simulation for a specified number of milliseconds.
+loop(LVT, LVTUB, _Events = [{'$gen_tw', ?PAUSE_FOR_PAYLOAD(PauseDuration)}|T], PastEvents, Module, ModuleStates) ->
+    erlang:send_after(PauseDuration, self(), system_event(?RESUME_PAYLOAD)),
+    pause_loop(LVT, LVTUB, T, PastEvents, Module, ModuleStates);
+
+%% Spurious resume.  As we are already simulating, ignore it.
+loop(LVT, LVTUB, _Events = [{'$gen_tw', ?RESUME_PAYLOAD}|T], PastEvents, Module, ModuleStates) ->
+    loop(LVT, LVTUB, T, PastEvents, Module, ModuleStates);
+
+%% Stop the simulation.
+loop(_LVT, _LVTUB, _Events = [{'$gen_tw', ?STOP_PAYLOAD(Reason)}|_], _PastEvents, Module, [{_, ModState}|_]) ->
     Module:terminate(ModState),
     exit(Reason);
 
@@ -282,7 +326,7 @@ loop(_LVT, _LVTUB, _Events = [#event{payload=?STOP_PAYLOAD(Reason)}|_], _PastEve
 %%
 %% NOTE:  We make no attempt to calculate GVT amongst gen_tw actors.  This is
 %% the responsibility of a system higher up the application stack.
-loop(LVT, LVTUB, _Events=[#event{lvt=GVT, payload=?GVT_UPDATE_PAYLOAD}|T], PastEvents, Module, ModStates) when LVT >= GVT ->
+loop(LVT, LVTUB, _Events=[{'$gen_tw', {?GVT_UPDATE_PAYLOAD, GVT}}|T], PastEvents, Module, ModStates) when LVT >= GVT ->
     NewLVTUB = lvt_ub(GVT, LVTUB),
     NewModStates = [{ModLVT, ModState} || {ModLVT, ModState} <- ModStates, ModLVT >= GVT],
     NewPastEvents = [E || E<-PastEvents, E#event.lvt >= GVT],
@@ -332,7 +376,16 @@ loop(_LVT, LVTUB, [Event = #event{lvt=ELVT}|T], PastEvents, Module, ModStates=[{
             erlang:throw(Reason)
     end.
 
--spec rollback_loop(virtual_time(), event_list(), past_event_list(), virtual_time(), atom(), module_state_list()) -> no_return().
+%% Blocks and waits indefintely for a resume event.  After which, the regular
+%% simulation loop is resumed.
+-spec pause_loop(virtual_time(), virtual_time(), event_list(), past_event_list(), atom(), module_state_list()) -> no_return().
+pause_loop(LVT, LVTUB, Events, PastEvents, Module, ModStates) ->
+    receive
+        {'$gen_tw', ?RESUME_PAYLOAD} ->
+            loop(LVT, LVTUB, Events, PastEvents, Module, ModStates)
+    end.
+
+-spec rollback_loop(virtual_time(), virtual_time(), event_list(), past_event_list(), atom(), module_state_list()) -> no_return().
 rollback_loop(RollbackLVT, LVTUB, Events, PastEvents, Module, ModStates) ->
     {ReplayOrUndo, NewPastEvents} = rollback(RollbackLVT, PastEvents),
 
