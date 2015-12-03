@@ -32,7 +32,7 @@ stop_paused_sim(Pid) ->
     F = fun(Reason, _State) -> Parent ! Reason end,
     meck:expect(test_actor, terminate, F),
 
-    process_flag(trap_exit, true),
+    erlang:unlink(Pid),
 
     gen_tw:pause(Pid),
 
@@ -43,10 +43,7 @@ stop_paused_sim(Pid) ->
 
     receive
         deadbeef ->
-            ?_assert(true);
-
-        Else ->
-            ?_assertMatch(true, Else)
+            ?_assert(true)
 
     after
         10 ->
