@@ -262,7 +262,7 @@ rollback_antievent(Pid) ->
     [FirstEvent|_] = Events,
     gen_tw:notify(Pid, gen_tw:antievent(FirstEvent)),
 
-    timer:sleep(100),
+    timer:sleep(1000),
 
     [?_assertEqual(ets:lookup_element(rollback_antievent, 49, 2), 1),
      ?_assertEqual(ets:lookup_element(rollback_antievent, 1, 2), 1),
@@ -273,7 +273,7 @@ rollback_causal_antievents_recv(LVT, LVT) ->
     ?_assert(true);
 rollback_causal_antievents_recv(LVT, Max) ->
     receive
-        {event, ELVT, _, false, _, _} when ELVT == LVT + 1 ->
+        {gen_tw_event, ELVT, _, false, _, _} when ELVT == LVT + 1 ->
             rollback_causal_antievents_recv(LVT+1, Max);
 
         _Event ->

@@ -15,7 +15,6 @@ setup(LVTUB) ->
 
 cleanup(Pid) ->
     erlang:unlink(Pid),
-    gen_tw:stop(Pid),
-    timer:sleep(1000),
+    exit(Pid, kill),
     meck:unload(test_actor),
     ok.
