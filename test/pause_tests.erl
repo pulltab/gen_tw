@@ -36,6 +36,7 @@ stop_paused_sim(Pid) ->
 
     gen_tw:pause(Pid),
 
+    %% Dwell here to ensure we are paused.
     timer:sleep(10),
 
     gen_tw:stop(Pid, StopReason),
@@ -48,7 +49,7 @@ stop_paused_sim(Pid) ->
             ?_assertMatch(true, Else)
 
     after
-        500 ->
+        10 ->
             ?_assert(false)
     end.
 
