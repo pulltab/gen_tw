@@ -8,6 +8,7 @@ tw_events_test_() ->
         fun test_util:cleanup/1,
         [
          fun pause_halts_sim/1,
+         fun pause_for/1,
          fun resume_resumes_sim/1
         ]}.
 
@@ -23,6 +24,27 @@ pause_halts_sim(Pid) ->
     timer:sleep(10),
 
     ?_assert(true).
+
+pause_for(Pid) ->
+    PauseDuration = 10,
+    PauseStart = erlang:timestamp(),
+    gen_tw:pause_for(Pid, PauseDuration),
+
+    Parent = self(),
+    TT =
+        fun(LVT, State) ->
+            Parent ! {tick_tock, erlang:timestamp()},
+            {LVT+1, State}
+        end,
+    meck:expect(test_actor, tick_tock, TT),
+
+    receive
+        {tick_tock, Timestamp} ->
+            ?_assert(timer:now_diff(Timestamp, PauseStart) >= PauseDuration)
+     after
+        50 ->
+            ?_assert(false)
+    end.
 
 resume_resumes_sim(Pid) ->
     Parent = self(),
