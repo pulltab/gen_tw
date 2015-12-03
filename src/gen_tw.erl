@@ -34,7 +34,7 @@
     {ok, NextState::term()} |
     {error, Reason::term()}.
 -callback handle_info(Term::term()) -> ok | {error, Reason::term()}.
--callback terminate(State::term()) -> any().
+-callback terminate(Reason::term(), State::term()) -> any().
 
 %% Invariant: When put into linear ordering, gen_tw (system events)
 %% appear before gen_tw_events (simulation events). Furthermore, the following
@@ -329,8 +329,7 @@ loop(LVT, LVTUB, _Events = [#gen_tw{payload=?RESUME_PAYLOAD}|T], PastEvents, Mod
 
 %% Stop the simulation.
 loop(_LVT, _LVTUB, _Events = [#gen_tw{payload=?STOP_PAYLOAD(Reason)}|_], _PastEvents, Module, [{_, ModState}|_]) ->
-    Module:terminate(ModState),
-    exit(Reason);
+    stop(Reason, Module, ModState);
 
 %% GVT Update.  We are guaranteed to never rollback to a time previous to this
 %% time value, thus, we can safely garbage collect ModStates and PastEvents occuring
@@ -388,13 +387,16 @@ loop(_LVT, LVTUB, [Event = #gen_tw_event{lvt=ELVT}|T], PastEvents, Module, ModSt
             erlang:throw(Reason)
     end.
 
-%% Blocks and waits indefintely for a resume event.  After which, the regular
-%% simulation loop is resumed.
+%% Blocks and waits indefintely for a resume or stop.  After which, the regular
+%% simulation loop is resumed or halted, accordingly.
 -spec pause_loop(virtual_time(), virtual_time(), event_list(), past_event_list(), atom(), module_state_list()) -> no_return().
-pause_loop(LVT, LVTUB, Events, PastEvents, Module, ModStates) ->
+pause_loop(LVT, LVTUB, Events, PastEvents, Module, ModStates = [{_, ModState}|_]) ->
     receive
         #gen_tw{payload=?RESUME_PAYLOAD} ->
-            loop(LVT, LVTUB, Events, PastEvents, Module, ModStates)
+            loop(LVT, LVTUB, Events, PastEvents, Module, ModStates);
+
+        #gen_tw{payload=?STOP_PAYLOAD(Reason)} ->
+            stop(Reason, Module, ModState)
     end.
 
 -spec rollback_loop(virtual_time(), virtual_time(), event_list(), past_event_list(), atom(), module_state_list()) -> no_return().
@@ -433,6 +435,11 @@ rollback(LVT, Events) when is_integer(LVT) andalso LVT >= 0 ->
 
 handle_event(LVT, #gen_tw_event{lvt=EventLVT, payload=Payload}, Module, ModuleState) ->
     Module:handle_event(LVT, EventLVT, Payload, ModuleState).
+
+-spec stop(term(), atom(), term()) -> no_return().
+stop(Reason, Module, ModState) ->
+    Module:terminate(Reason, ModState),
+    exit(Reason).
 
 -spec uuid() -> uuid:uuid().
 uuid() ->

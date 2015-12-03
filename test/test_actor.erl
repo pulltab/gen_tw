@@ -6,7 +6,7 @@
          tick_tock/2,
          handle_event/4,
          handle_info/1,
-         terminate/1]).
+         terminate/2]).
 
 init(_) ->
     {ok, #{}}.
@@ -20,5 +20,5 @@ handle_event(_LVT, _ELVT, <<>>, State) ->
 handle_info(Msg) ->
     Msg.
 
-terminate(_) ->
+terminate(_, _) ->
     ok.

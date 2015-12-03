@@ -2,12 +2,13 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-tw_events_test_() ->
+pause_test_() ->
     {foreach,
         fun test_util:setup/0,
         fun test_util:cleanup/1,
         [
          fun pause_halts_sim/1,
+         fun stop_paused_sim/1,
          fun pause_for/1,
          fun resume_resumes_sim/1
         ]}.
@@ -24,6 +25,32 @@ pause_halts_sim(Pid) ->
     timer:sleep(10),
 
     ?_assert(true).
+
+stop_paused_sim(Pid) ->
+    Parent = self(),
+    StopReason = deadbeef,
+    F = fun(Reason, _State) -> Parent ! Reason end,
+    meck:expect(test_actor, terminate, F),
+
+    process_flag(trap_exit, true),
+
+    gen_tw:pause(Pid),
+
+    timer:sleep(10),
+
+    gen_tw:stop(Pid, StopReason),
+
+    receive
+        deadbeef ->
+            ?_assert(true);
+
+        Else ->
+            ?_assertMatch(true, Else)
+
+    after
+        500 ->
+            ?_assert(false)
+    end.
 
 pause_for(Pid) ->
     PauseDuration = 10,
