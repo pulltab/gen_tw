@@ -262,7 +262,7 @@ rollback_antievent(Pid) ->
     [FirstEvent|_] = Events,
     gen_tw:notify(Pid, gen_tw:antievent(FirstEvent)),
 
-    timer:sleep(100),
+    timer:sleep(1000),
 
     [?_assertEqual(ets:lookup_element(rollback_antievent, 49, 2), 1),
      ?_assertEqual(ets:lookup_element(rollback_antievent, 1, 2), 1),
