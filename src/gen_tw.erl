@@ -41,7 +41,7 @@
 %% must also hold:
 %%
 %%   * pause system events < resume system events
-%%   * antievents simulation events < corresponding simulation event
+%%   * simulation antievents < corresponding simulation event
 -record(gen_tw,
     {
      payload :: term()
@@ -58,11 +58,11 @@
 
 %% Invariant: The list contains no duplicates, and the events are sorted by
 %% increasing LVT.
--type event_list() :: [#gen_tw_event{}].
+-type event_list() :: [#gen_tw_event{} | #gen_tw{}].
 
 %% Invariant: The list contains no duplicates, and the events are sorted by
 %% decreasing LVT.
--type past_event_list() :: [#gen_tw_event{}].
+-type past_event_list() :: [#gen_tw_event{} | #gen_tw{}].
 
 -type module_state() :: {virtual_time(), term()}.
 
@@ -75,11 +75,12 @@
 -opaque event() :: #gen_tw_event{}.
 -type virtual_time() :: integer().
 
--define(PAUSE_PAYLOAD, 'pause').
--define(PAUSE_FOR_PAYLOAD(Duration), {'pause_for', Duration}).
--define(RESUME_PAYLOAD, 'resume').
--define(STOP_PAYLOAD(Reason), {'stop', Reason}).
--define(GVT_UPDATE_PAYLOAD, '$gvt').
+%% Macros used for more friendly pattern matching.
+-define(PAUSE_PAYLOAD, pause).
+-define(PAUSE_FOR_PAYLOAD(Duration), {pause_for, Duration}).
+-define(RESUME_PAYLOAD, resume).
+-define(STOP_PAYLOAD(Reason), {stop, Reason}).
+-define(GVT_UPDATE_PAYLOAD, gvt).
 
 %%%===================================================================
 %%% API
@@ -169,6 +170,8 @@ notify(Ref, Event) when
 %%% Internals
 %%%===================================================================
 
+-type system_event() :: #gen_tw{}.
+-spec system_event(term()) -> system_event().
 system_event(Payload) ->
     #gen_tw{payload=Payload}.
 
