@@ -401,24 +401,28 @@ pause_loop(LVT, LVTUB, Events, PastEvents, Module, ModStates = [{_, ModState}|_]
 
     %% Wait to process a stop or resume system event.  Additional pause or
     %% pause_for commands will be discarded.
-    wait_for_stop_or_resume(Module, ModState),
+    case wait_for_stop_or_resume() of
+        ok ->
+            loop(LVT, LVTUB, SimulationEvents, PastEvents, Module, ModStates);
 
-    loop(LVT, LVTUB, SimulationEvents, PastEvents, Module, ModStates).
+        {stop, Reason} ->
+            stop(Reason, Module, ModState)
+    end.
 
--spec wait_for_stop_or_resume(atom(), term()) -> ok | no_return().
-wait_for_stop_or_resume(Module, ModState) ->
+-spec wait_for_stop_or_resume() -> ok | {stop, term()}.
+wait_for_stop_or_resume() ->
     receive
         #gen_tw{payload=?PAUSE_PAYLOAD} ->
-            wait_for_stop_or_resume(Module, ModState);
+            wait_for_stop_or_resume();
 
         #gen_tw{payload=?PAUSE_FOR_PAYLOAD(_)} ->
-            wait_for_stop_or_resume(Module, ModState);
+            wait_for_stop_or_resume();
 
         #gen_tw{payload=?RESUME_PAYLOAD} ->
             ok;
 
         #gen_tw{payload=?STOP_PAYLOAD(Reason)} ->
-            stop(Reason, Module, ModState)
+            {stop, Reason}
     end.
 
 -spec rollback_loop(virtual_time(), virtual_time(), event_list(), past_event_list(), atom(), module_state_list()) -> no_return().
