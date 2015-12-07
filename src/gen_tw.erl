@@ -31,11 +31,15 @@
     ignore.
 -callback tick_tock(CurrentLVT::virtual_time(), State::term()) -> {NextLVT::virtual_time(), NextState::term()}.
 
--callback handle_past_event(ClosestLVT::virtual_time(), EventLVT::virtual_time(), Event::term(), ClosestModuleState::term()) ->
-    ignore |
-    rollback |
-    {rollback, RBLVT::virtual_time(), RBState::term()} |
-    {error, Reason::term()}.
+%% handle_past_event is an optional callback.  This callback definition is
+%% purposefully commented out to prevent spurious compiler warnings for gen_tw
+%% modules which do not implement this callback.
+%%
+%%-callback handle_past_event(ClosestLVT::virtual_time(), EventLVT::virtual_time(), Event::term(), ClosestModuleState::term()) ->
+%%    ignore |
+%%    rollback |
+%%    {rollback, RBLVT::virtual_time(), RBState::term()} |
+%%    {error, Reason::term()}.
 
 -callback handle_event(CurrentLVT::virtual_time(), EventLVT::virtual_time(), Event::term(), ModuleState::term()) ->
     {ok, NextState::term()} |
