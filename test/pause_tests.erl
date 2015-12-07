@@ -35,10 +35,6 @@ stop_paused_sim(Pid) ->
     erlang:unlink(Pid),
 
     gen_tw:pause(Pid),
-
-    %% Dwell here to ensure we are paused.
-    timer:sleep(10),
-
     gen_tw:stop(Pid, StopReason),
 
     receive

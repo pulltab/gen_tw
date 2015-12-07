@@ -40,7 +40,7 @@
 %% appear before gen_tw_events (simulation events). Furthermore, the following
 %% must also hold:
 %%
-%%   * pause system events < resume system events
+%%   * pause, pause_for system events < stop, resume system events
 %%   * simulation antievents < corresponding simulation event
 -record(gen_tw,
     {
@@ -387,16 +387,42 @@ loop(_LVT, LVTUB, [Event = #gen_tw_event{lvt=ELVT}|T], PastEvents, Module, ModSt
             erlang:throw(Reason)
     end.
 
-%% Blocks and waits indefintely for a resume or stop.  After which, the regular
+%% Block and wait indefintely for a resume or stop.  After which, the regular
 %% simulation loop is resumed or halted, accordingly.
 -spec pause_loop(virtual_time(), virtual_time(), event_list(), past_event_list(), atom(), module_state_list()) -> no_return().
 pause_loop(LVT, LVTUB, Events, PastEvents, Module, ModStates = [{_, ModState}|_]) ->
+
+    %% Reinject system events into our erlang message queue.  Here they will be
+    %% processed by wait_for_stop_or_resume. This allows us to process these
+    %% events within the context of being paused.
+    Pred = fun(Event) -> is_record(Event, gen_tw) end,
+    {SystemEvents, SimulationEvents} = lists:partition(Pred, Events),
+    [self() ! Event || Event <- SystemEvents],
+
+    %% Wait to process a stop or resume system event.  Additional pause or
+    %% pause_for commands will be discarded.
+    case wait_for_stop_or_resume() of
+        ok ->
+            loop(LVT, LVTUB, SimulationEvents, PastEvents, Module, ModStates);
+
+        {stop, Reason} ->
+            stop(Reason, Module, ModState)
+    end.
+
+-spec wait_for_stop_or_resume() -> ok | {stop, term()}.
+wait_for_stop_or_resume() ->
     receive
+        #gen_tw{payload=?PAUSE_PAYLOAD} ->
+            wait_for_stop_or_resume();
+
+        #gen_tw{payload=?PAUSE_FOR_PAYLOAD(_)} ->
+            wait_for_stop_or_resume();
+
         #gen_tw{payload=?RESUME_PAYLOAD} ->
-            loop(LVT, LVTUB, Events, PastEvents, Module, ModStates);
+            ok;
 
         #gen_tw{payload=?STOP_PAYLOAD(Reason)} ->
-            stop(Reason, Module, ModState)
+            {stop, Reason}
     end.
 
 -spec rollback_loop(virtual_time(), virtual_time(), event_list(), past_event_list(), atom(), module_state_list()) -> no_return().
