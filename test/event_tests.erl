@@ -60,6 +60,7 @@ tw_events_test_() ->
             fun handle_info/1,
             fun handle_info_error/1,
             fun tick_tock/1,
+            fun past_events_ignore/1,
             fun in_order_event_processing/1,
             fun in_queue_antievent_cancels_event/1,
             fun rollback_event_replay/1,
@@ -71,8 +72,6 @@ tw_events_test_() ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% General Properties
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% Event Handling
@@ -139,6 +138,46 @@ tick_tock(_Pid) ->
 
     timer:sleep(100),
     ?_assert(true).
+
+%% Ensure that users can bypass rollback behavior on demand.
+past_events_ignore(Pid) ->
+    Parent = self(),
+    HandleEvent =
+        fun(_, _, _, State) ->
+            case maps:get(run, State, false) of
+                true ->
+                    exit(should_not_be_reached);
+
+                false ->
+                    Parent ! handle_event,
+                    {ok, #{run => true}}
+           end
+        end,
+    meck:expect(test_actor, handle_event, HandleEvent),
+
+    HandlePastEvent =
+        fun(_, _, _, _) ->
+            Parent ! done,
+            ignore
+        end,
+    meck:expect(test_actor, handle_past_event, HandlePastEvent),
+
+    gen_tw:notify(Pid, gen_tw:event(50, <<>>)),
+
+    receive
+        handle_event ->
+            %% Trigger rollback, which should be ignored
+            gen_tw:notify(Pid, gen_tw:event(25, <<>>))
+    end,
+
+    receive
+        done ->
+            timer:sleep(100),
+            ?_assert(true)
+    after
+        100 ->
+            ?_assert(false)
+    end.
 
 shuffle(L) ->
     [X || {_, X} <- lists:sort([{random:uniform(), X} || X <- L])].
