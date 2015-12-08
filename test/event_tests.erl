@@ -61,6 +61,7 @@ tw_events_test_() ->
             fun handle_info_error/1,
             fun tick_tock/1,
             fun past_events_ignore/1,
+            fun past_events_custom_rollback/1,
             fun in_order_event_processing/1,
             fun in_queue_antievent_cancels_event/1,
             fun rollback_event_replay/1,
@@ -178,6 +179,43 @@ past_events_ignore(Pid) ->
         100 ->
             ?_assert(false)
     end.
+
+expect([], _) ->
+    ?_assert(true);
+expect([Msg|T], TMO) ->
+    receive
+        Msg ->
+            expect(T, TMO)
+    after
+        TMO ->
+            ?_assert(false)
+    end.
+
+past_events_custom_rollback(Pid) ->
+    Parent = self(),
+    HandleEvent =
+        fun(_, ELVT, _, State) ->
+            Parent ! {handle_event, ELVT},
+            {ok, State}
+        end,
+    meck:expect(test_actor, handle_event, HandleEvent),
+
+    HandlePastEvent =
+        fun(_, _, _, State) ->
+            Parent ! handle_past_event,
+            {rollback, 6, State}
+        end,
+    meck:expect(test_actor, handle_past_event, HandlePastEvent),
+
+    gen_tw:notify(Pid, gen_tw:event(5, <<>>)),
+    gen_tw:notify(Pid, gen_tw:event(7, <<>>)),
+
+    timer:sleep(10),
+
+    gen_tw:notify(Pid, gen_tw:event(5, <<>>)),
+
+    ExpectedMsgs = [{handle_event, 5}, {handle_event, 7}, handle_past_event, {handle_event, 7}],
+    expect(ExpectedMsgs, 10).
 
 shuffle(L) ->
     [X || {_, X} <- lists:sort([{random:uniform(), X} || X <- L])].

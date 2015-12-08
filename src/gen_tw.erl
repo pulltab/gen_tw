@@ -382,7 +382,7 @@ loop(LVT, LVTUB, Events=[Event=#gen_tw_event{lvt=ELVT}|T], PastEvents, Module, M
 
         {rollback, RBLVT, RBState} ->
             NewModStates = ordsets:add_element({RBLVT, RBState}, ModStates),
-            rollback_loop(RBLVT, LVTUB, Events, PastEvents, Module, NewModStates);
+            rollback_loop(RBLVT, LVTUB, T, PastEvents, Module, NewModStates);
 
         {error, Reason} ->
             stop(Reason, ClosestState)
