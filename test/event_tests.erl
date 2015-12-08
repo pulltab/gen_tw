@@ -180,7 +180,7 @@ past_events_ignore(Pid) ->
             ?_assert(false)
     end.
 
-
+%% Ensure users can inject states can control rollback behavior.
 past_events_custom_rollback(Pid) ->
     Parent = self(),
     HandleEvent =
