@@ -30,6 +30,17 @@
     {stop, Reason::term()} |
     ignore.
 -callback tick_tock(CurrentLVT::virtual_time(), State::term()) -> {NextLVT::virtual_time(), NextState::term()}.
+
+%% handle_past_event is an optional callback.  This callback definition is
+%% purposefully commented out to prevent spurious compiler warnings for gen_tw
+%% modules which do not implement this callback.
+%%
+%%-callback handle_past_event(ClosestLVT::virtual_time(), EventLVT::virtual_time(), Event::term(), ClosestModuleState::term()) ->
+%%    ignore |
+%%    rollback |
+%%    {rollback, RBLVT::virtual_time(), RBState::term()} |
+%%    {error, Reason::term()}.
+
 -callback handle_event(CurrentLVT::virtual_time(), EventLVT::virtual_time(), Event::term(), ModuleState::term()) ->
     {ok, NextState::term()} |
     {error, Reason::term()}.
@@ -360,8 +371,22 @@ loop(LVT, LVTUB, Events=[#gen_tw_event{lvt=ELVT, not_anti=false}|_], PastEvents,
 %%
 %% Note:  This clause must applied before applying other rules such as
 %% antievent/event cancellation.
-loop(LVT, LVTUB, Events=[#gen_tw_event{lvt=ELVT}|_], PastEvents, Module, ModStates) when ELVT < LVT ->
-    rollback_loop(ELVT, LVTUB, Events, PastEvents, Module, ModStates);
+loop(LVT, LVTUB, Events=[Event=#gen_tw_event{lvt=ELVT}|T], PastEvents, Module, ModStates) when ELVT < LVT ->
+    {ClosestLVT, ClosestState} = find_closest(LVT, ModStates),
+    case handle_past_event(ClosestLVT, Event, Module, ClosestState) of
+        ignore ->
+            loop(LVT, LVTUB, T, PastEvents, Module, ModStates);
+
+        rollback ->
+            rollback_loop(ELVT, LVTUB, Events, PastEvents, Module, ModStates);
+
+        {rollback, RBLVT, RBState} ->
+            NewModStates = ordsets:add_element({RBLVT, RBState}, ModStates),
+            rollback_loop(RBLVT, LVTUB, T, PastEvents, Module, NewModStates);
+
+        {error, Reason} ->
+            stop(Reason, ClosestState)
+    end;
 
 %% Antievent and events meeting in Events cancel each other
 %% out.  Note:  We are relying on antievents appearing in the ordering first.
@@ -458,6 +483,26 @@ rollback(LVT, [Event|T], NewEvents) ->
 -spec rollback(virtual_time(), past_event_list()) -> {event_list(), past_event_list()}.
 rollback(LVT, Events) when is_integer(LVT) andalso LVT >= 0 ->
     rollback(LVT, Events, []).
+
+-spec find_closest(virtual_time(), module_state_list()) -> {virtual_time(), term()}.
+find_closest(LVT, [Res = {ModLVT, _ModState}|_]) when LVT =< ModLVT ->
+    Res;
+find_closest(LVT, [_AfterLVT|T]) ->
+    find_closest(LVT, T).
+
+-spec handle_past_event(virtual_time(), event(), atom(), module_state_list()) ->
+        ignore |
+        rollback |
+        {rollback, virtual_time(), term()} |
+        {error, term()}.
+handle_past_event(ClosestLVT, #gen_tw_event{lvt=EventLVT, payload=Payload}, Module, ModuleState) ->
+    case erlang:function_exported(Module, handle_past_event, 4) of
+        true ->
+            Module:handle_past_event(ClosestLVT, EventLVT, Payload, ModuleState);
+
+        false ->
+            rollback
+    end.
 
 handle_event(LVT, #gen_tw_event{lvt=EventLVT, payload=Payload}, Module, ModuleState) ->
     Module:handle_event(LVT, EventLVT, Payload, ModuleState).

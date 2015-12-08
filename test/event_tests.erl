@@ -60,6 +60,8 @@ tw_events_test_() ->
             fun handle_info/1,
             fun handle_info_error/1,
             fun tick_tock/1,
+            fun past_events_ignore/1,
+            fun past_events_custom_rollback/1,
             fun in_order_event_processing/1,
             fun in_queue_antievent_cancels_event/1,
             fun rollback_event_replay/1,
@@ -71,8 +73,6 @@ tw_events_test_() ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% General Properties
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% Event Handling
@@ -139,6 +139,74 @@ tick_tock(_Pid) ->
 
     timer:sleep(100),
     ?_assert(true).
+
+%% Ensure that users can bypass rollback behavior on demand.
+past_events_ignore(Pid) ->
+    Parent = self(),
+    HandleEvent =
+        fun(_, _, _, State) ->
+            case maps:get(run, State, false) of
+                true ->
+                    Parent ! deadbeef;
+
+                false ->
+                    Parent ! handle_event,
+                    {ok, #{run => true}}
+           end
+        end,
+    meck:expect(test_actor, handle_event, HandleEvent),
+
+    HandlePastEvent =
+        fun(_, _, _, _) ->
+            Parent ! handle_past_event,
+            ignore
+        end,
+    meck:expect(test_actor, handle_past_event, HandlePastEvent),
+
+    gen_tw:notify(Pid, gen_tw:event(50, <<>>)),
+
+    case test_util:expect([handle_event], 100) of
+        true ->
+            gen_tw:notify(Pid, gen_tw:event(25, <<>>)),
+            HandlePastEventCalled = test_util:expect([handle_past_event], 100),
+            PastEventIgnored = not test_util:expect([deadbeef], 100),
+            [
+             ?_assert(HandlePastEventCalled),
+             ?_assert(PastEventIgnored)
+            ];
+
+        false ->
+            %% Should not be reached.
+            ?_assert(false)
+    end.
+
+%% Ensure users can inject states can control rollback behavior.
+past_events_custom_rollback(Pid) ->
+    Parent = self(),
+    HandleEvent =
+        fun(_, ELVT, _, State) ->
+            Parent ! {handle_event, ELVT},
+            {ok, State}
+        end,
+    meck:expect(test_actor, handle_event, HandleEvent),
+
+    HandlePastEvent =
+        fun(_, _, _, State) ->
+            Parent ! handle_past_event,
+            {rollback, 6, State}
+        end,
+    meck:expect(test_actor, handle_past_event, HandlePastEvent),
+
+    gen_tw:notify(Pid, gen_tw:event(5, <<>>)),
+    gen_tw:notify(Pid, gen_tw:event(7, <<>>)),
+
+    timer:sleep(10),
+
+    gen_tw:notify(Pid, gen_tw:event(5, <<>>)),
+
+    ExpectedMsgs = [{handle_event, 5}, {handle_event, 7}, handle_past_event, {handle_event, 7}],
+    Res = test_util:expect(ExpectedMsgs, 10),
+    ?_assert(Res).
 
 shuffle(L) ->
     [X || {_, X} <- lists:sort([{random:uniform(), X} || X <- L])].
