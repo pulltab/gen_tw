@@ -181,14 +181,14 @@ past_events_ignore(Pid) ->
     end.
 
 expect([], _) ->
-    ?_assert(true);
+    true;
 expect([Msg|T], TMO) ->
     receive
         Msg ->
             expect(T, TMO)
     after
         TMO ->
-            ?_assert(false)
+            false
     end.
 
 past_events_custom_rollback(Pid) ->
@@ -214,8 +214,8 @@ past_events_custom_rollback(Pid) ->
 
     gen_tw:notify(Pid, gen_tw:event(5, <<>>)),
 
-    ExpectedMsgs = [{handle_event, 5}, {handle_event, 7}, handle_past_event, {handle_event, 7}],
-    expect(ExpectedMsgs, 10).
+    ExpectedMsgs = [{handle_event, 5}, {handle_event, 17}, handle_past_event, {handle_event, 7}],
+    ?_assert(expect(ExpectedMsgs, 10)).
 
 shuffle(L) ->
     [X || {_, X} <- lists:sort([{random:uniform(), X} || X <- L])].
