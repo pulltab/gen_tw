@@ -2,7 +2,8 @@
 
 -export([setup/0,
          setup/1,
-         cleanup/1
+         cleanup/1,
+         expect/2
         ]).
 
 setup() ->
@@ -18,3 +19,14 @@ cleanup(Pid) ->
     exit(Pid, kill),
     meck:unload(test_actor),
     ok.
+
+expect([], _) ->
+    true;
+expect([Msg|T], TMO) ->
+    receive
+        Msg ->
+            expect(T, TMO)
+    after
+        TMO ->
+            false
+    end.

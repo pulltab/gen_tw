@@ -147,7 +147,7 @@ past_events_ignore(Pid) ->
         fun(_, _, _, State) ->
             case maps:get(run, State, false) of
                 true ->
-                    exit(should_not_be_reached);
+                    Parent ! deadbeef;
 
                 false ->
                     Parent ! handle_event,
@@ -158,38 +158,28 @@ past_events_ignore(Pid) ->
 
     HandlePastEvent =
         fun(_, _, _, _) ->
-            Parent ! done,
+            Parent ! handle_past_event,
             ignore
         end,
     meck:expect(test_actor, handle_past_event, HandlePastEvent),
 
     gen_tw:notify(Pid, gen_tw:event(50, <<>>)),
 
-    receive
-        handle_event ->
-            %% Trigger rollback, which should be ignored
-            gen_tw:notify(Pid, gen_tw:event(25, <<>>))
-    end,
+    case test_util:expect([handle_event], 100) of
+        true ->
+            gen_tw:notify(Pid, gen_tw:event(25, <<>>)),
+            HandlePastEventCalled = test_util:expect([handle_past_event], 100),
+            PastEventIgnored = not test_util:expect([deadbeef], 100),
+            [
+             ?_assert(HandlePastEventCalled),
+             ?_assert(PastEventIgnored)
+            ];
 
-    receive
-        done ->
-            timer:sleep(100),
-            ?_assert(true)
-    after
-        100 ->
+        false ->
+            %% Should not be reached.
             ?_assert(false)
     end.
 
-expect([], _) ->
-    true;
-expect([Msg|T], TMO) ->
-    receive
-        Msg ->
-            expect(T, TMO)
-    after
-        TMO ->
-            false
-    end.
 
 past_events_custom_rollback(Pid) ->
     Parent = self(),
@@ -215,7 +205,7 @@ past_events_custom_rollback(Pid) ->
     gen_tw:notify(Pid, gen_tw:event(5, <<>>)),
 
     ExpectedMsgs = [{handle_event, 5}, {handle_event, 7}, handle_past_event, {handle_event, 7}],
-    Res = expect(ExpectedMsgs, 10),
+    Res = test_util:expect(ExpectedMsgs, 10),
     ?_assert(Res).
 
 shuffle(L) ->
